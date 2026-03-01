@@ -106,6 +106,28 @@ def list_runs(limit: int = 50):
         })
     return {"count": len(items), "items": items}
 
+@app.get("/runs/{run_id}")
+def get_run(run_id: str):
+    """
+    Return the full JSON artifact for a given run_id from RUNS_DIR.
+    """
+    p = RUNS_DIR / f"{run_id}.json"
+    if not p.exists():
+        raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
+
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read run artifact: {e}")
+
+    # Optional: add file metadata without mutating stored artifact
+    data["_file"] = {
+        "path": str(p),
+        "size_bytes": p.stat().st_size,
+        "updated_at": datetime.fromtimestamp(p.stat().st_mtime, tz=timezone.utc).isoformat(),
+    }
+    return data
+
 @app.post("/ask")
 def ask(req: Ask):
     return {"answer": "Ask endpoint operational. Use explicit tool calls or /multi-run."}
