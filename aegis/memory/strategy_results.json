@@ -1758,5 +1758,165 @@
         "sma_slow": 124
       }
     }
+  },
+  {
+    "strategy": {
+      "fast": 23,
+      "slow": 38
+    },
+    "performance": {
+      "strategy": "sma",
+      "symbols": "SPY",
+      "sharpe": 0.033,
+      "maxDD": -0.05854294764300372,
+      "params": {
+        "sma_fast": 23,
+        "sma_slow": 38
+      }
+    }
+  },
+  {
+    "strategy": {
+      "fast": 19,
+      "slow": 47
+    },
+    "performance": {
+      "strategy": "sma",
+      "symbols": "SPY",
+      "sharpe": 0.03,
+      "maxDD": -0.05854294764300372,
+      "params": {
+        "sma_fast": 19,
+        "sma_slow": 47
+      }
+    }
+  },
+  {
+    "strategy": {
+      "fast": 8,
+      "slow": 49
+    },
+    "performance": {
+      "strategy": "sma",
+      "symbols": "SPY",
+      "sharpe": 0.03,
+      "maxDD": -0.05854294764300372,
+      "params": {
+        "sma_fast": 8,
+        "sma_slow": 49
+      }
+    }
+  },
+  {
+    "strategy": {
+      "fast": 24,
+      "slow": 55
+    },
+    "performance": {
+      "strategy": "sma",
+      "symbols": "SPY",
+      "sharpe": 0.022,
+      "maxDD": -0.05854294764300372,
+      "params": {
+        "sma_fast": 24,
+        "sma_slow": 55
+      }
+    }
+  },
+  {
+    "strategy": {
+      "fast": 17,
+      "slow": 91
+    },
+    "performance": {
+      "strategy": "sma",
+      "symbols": "SPY",
+      "sharpe": 0.008,
+      "maxDD": -0.05854294764300372,
+      "params": {
+        "sma_fast": 17,
+        "sma_slow": 91
+      }
+    }
+  },
+  {
+    "strategy": {
+      "fast": 12,
+      "slow": 97
+    },
+    "performance": {
+      "strategy": "sma",
+      "symbols": "SPY",
+      "sharpe": 0.007,
+      "maxDD": -0.05854294764300372,
+      "params": {
+        "sma_fast": 12,
+        "sma_slow": 97
+      }
+    }
+  },
+  {
+    "strategy": {
+      "fast": 5,
+      "slow": 153
+    },
+    "performance": {
+      "strategy": "sma",
+      "symbols": "SPY",
+      "sharpe": 0.005,
+      "maxDD": -0.05854294764300372,
+      "params": {
+        "sma_fast": 5,
+        "sma_slow": 153
+      }
+    }
+  },
+  {
+    "strategy": {
+      "fast": 8,
+      "slow": 103
+    },
+    "performance": {
+      "strategy": "sma",
+      "symbols": "SPY",
+      "sharpe": 0.001,
+      "maxDD": -0.05854294764300372,
+      "params": {
+        "sma_fast": 8,
+        "sma_slow": 103
+      }
+    }
+  },
+  {
+    "strategy": {
+      "fast": 14,
+      "slow": 117
+    },
+    "performance": {
+      "strategy": "sma",
+      "symbols": "SPY",
+      "sharpe": 0.001,
+      "maxDD": -0.05854294764300372,
+      "params": {
+        "sma_fast": 14,
+        "sma_slow": 117
+      }
+    }
+  },
+  {
+    "strategy": {
+      "fast": 2,
+      "slow": 140
+    },
+    "performance": {
+      "strategy": "sma",
+      "symbols": "SPY",
+      "sharpe": -0.0,
+      "maxDD": -0.05854294764300372,
+      "params": {
+        "sma_fast": 2,
+        "sma_slow": 140
+      }
+    }
   }
 ]
