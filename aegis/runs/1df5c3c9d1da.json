@@ -1,0 +1,51 @@
+{
+  "run_id": "1df5c3c9d1da",
+  "status": "COMPLETE",
+  "request": {
+    "name": "batch_smoke",
+    "symbols": [
+      "SPY",
+      "AAPL"
+    ],
+    "strategies": [
+      "sma"
+    ],
+    "timeframe": "1d",
+    "start": null,
+    "end": null
+  },
+  "results": [
+    {
+      "strategy": "sma",
+      "symbol": "SPY",
+      "output": {
+        "strategy": "sma",
+        "symbols": [
+          "SPY"
+        ],
+        "sharpe": 1.23,
+        "maxDD": 0.16,
+        "params": {
+          "sma_fast": 50,
+          "sma_slow": 200
+        }
+      }
+    },
+    {
+      "strategy": "sma",
+      "symbol": "AAPL",
+      "output": {
+        "strategy": "sma",
+        "symbols": [
+          "AAPL"
+        ],
+        "sharpe": 1.23,
+        "maxDD": 0.16,
+        "params": {
+          "sma_fast": 50,
+          "sma_slow": 200
+        }
+      }
+    }
+  ]
+}

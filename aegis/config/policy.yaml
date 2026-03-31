@@ -1,0 +1,14 @@
+mode: paper
+max_symbols: 5
+
+tools:
+  allow:
+    - backtest.run
+    - plot.equity
+    - run_and_plot
+    - run_and_plot_save
+    - strategy.run
+  deny: []
+
+rate_limits:
+  backtest_per_hour: 10
