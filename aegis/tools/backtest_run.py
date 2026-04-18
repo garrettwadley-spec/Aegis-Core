@@ -1,6 +1,6 @@
 print("RUNNING REAL BACKTEST FILE")
-import pandas as pd
 
+import pandas as pd
 
 
 def backtest_run(strategy="sma", symbols=None, params=None):
@@ -24,15 +24,23 @@ def backtest_run(strategy="sma", symbols=None, params=None):
     df["fast_ma"] = df["close"].rolling(fast).mean()
     df["slow_ma"] = df["close"].rolling(slow).mean()
 
-    # Signal (Step 3)
-    df["vol_avg"] = df["volume"].rolling(20).mean()
+    # STATE
+    df["trend"] = df["fast_ma"] > df["slow_ma"]
+    df["pullback"] = df["close"] < df["fast_ma"]
+    df["oversold"] = df["rsi"] < 35
+
+    # 🔥 NEW TRIGGER (BALANCED)
+    df["trigger"] = df["close"] > df["open"]
+
+    # SIGNAL
     df["signal"] = (
-        (df["rsi"] < 30) &
-        (df["close"] < df["slow_ma"]) &
-        (df["volume"] > df["vol_avg"])
+        df["trend"] &
+        df["pullback"] &
+        df["oversold"] &
+        df["trigger"]
     ).astype(int)
 
-    # ✅ STEP 4 — MUST BE HERE (inside function)
+    # POSITION + EXIT
     df["position"] = df["signal"]
 
     df["exit"] = (
@@ -51,9 +59,7 @@ def backtest_run(strategy="sma", symbols=None, params=None):
     return {
         "strategy": strategy,
         "symbols": symbols,
-        "sharpe": float(round(sharpe, 3)),
+        "sharpe": float(round(sharpe, 3)) if pd.notna(sharpe) else 0.0,
         "maxDD": float(df["strategy_returns"].min()),
         "params": params
     }
-
-
