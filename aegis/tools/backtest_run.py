@@ -13,8 +13,8 @@ def backtest_run(strategy="macd_momentum", symbols=None, params=None):
     # =========================
     # 🔥 MACD CORE
     # =========================
-    ema_fast = df["close"].ewm(span=8).mean()
-    ema_slow = df["close"].ewm(span=17).mean()
+    ema_fast = df["close"].ewm(span=12).mean()
+    ema_slow = df["close"].ewm(span=26).mean()
 
     df["macd"] = ema_fast - ema_slow
     df["signal_line"] = df["macd"].ewm(span=9).mean()
@@ -42,7 +42,7 @@ def backtest_run(strategy="macd_momentum", symbols=None, params=None):
 
     # Volume confirmation
     df["vol_avg"] = df["volume"].rolling(20).mean()
-    volume_confirm = df["volume"] > df["vol_avg"] * 1.5
+    volume_confirm = df["volume"] > df["vol_avg"] * 5
 
     # =========================
     # 🔥 SIGNAL (YOUR EDGE)
