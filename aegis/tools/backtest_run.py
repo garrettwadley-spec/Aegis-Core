@@ -42,7 +42,7 @@ def backtest_run(strategy="macd_momentum", symbols=None, params=None):
 
     # Volume confirmation
     df["vol_avg"] = df["volume"].rolling(20).mean()
-    volume_confirm = df["volume"] > df["vol_avg"] * 5
+    volume_confirm = df["volume"] > df["vol_avg"] * 2
 
     # =========================
     # 🔥 SIGNAL (YOUR EDGE)
