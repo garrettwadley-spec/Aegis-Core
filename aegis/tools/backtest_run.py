@@ -13,11 +13,11 @@ def backtest_run(strategy="macd_momentum", symbols=None, params=None):
     # =========================
     # 🔥 MACD CORE
     # =========================
-    ema_fast = df["close"].ewm(span=8).mean()
-    ema_slow = df["close"].ewm(span=17).mean()
+    ema_fast = df["close"].ewm(span=3).mean()
+    ema_slow = df["close"].ewm(span=10).mean()
 
     df["macd"] = ema_fast - ema_slow
-    df["signal_line"] = df["macd"].ewm(span=9).mean()
+    df["signal_line"] = df["macd"].ewm(span=16).mean()
 
     # MACD slope = your "angle"
     df["macd_slope"] = df["macd"] - df["macd"].shift(1)
