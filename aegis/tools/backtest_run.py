@@ -13,8 +13,8 @@ def backtest_run(strategy="macd_momentum", symbols=None, params=None):
     # =========================
     # 🔥 MACD CORE
     # =========================
-    ema_fast = df["close"].ewm(span=12).mean()
-    ema_slow = df["close"].ewm(span=26).mean()
+    ema_fast = df["close"].ewm(span=8).mean()
+    ema_slow = df["close"].ewm(span=17).mean()
 
     df["macd"] = ema_fast - ema_slow
     df["signal_line"] = df["macd"].ewm(span=9).mean()
