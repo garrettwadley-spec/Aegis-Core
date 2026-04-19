@@ -3,63 +3,85 @@ print("RUNNING REAL BACKTEST FILE")
 import pandas as pd
 
 
-def backtest_run(strategy="sma", symbols=None, params=None):
+def backtest_run(strategy="macd_momentum", symbols=None, params=None):
 
     symbols = symbols or ["SPY"]
-    params = params or {"sma_fast": 50, "sma_slow": 200}
+    params = params or {}
 
     df = pd.read_csv("aegis/data_storage/SPY.csv")
 
-    fast = params["sma_fast"]
-    slow = params["sma_slow"]
+    # =========================
+    # 🔥 MACD CORE
+    # =========================
+    ema_fast = df["close"].ewm(span=12).mean()
+    ema_slow = df["close"].ewm(span=26).mean()
 
-    # RSI
-    delta = df["close"].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-    rs = gain / loss
-    df["rsi"] = 100 - (100 / (1 + rs))
+    df["macd"] = ema_fast - ema_slow
+    df["signal_line"] = df["macd"].ewm(span=9).mean()
 
-    # Moving averages
-    df["fast_ma"] = df["close"].rolling(fast).mean()
-    df["slow_ma"] = df["close"].rolling(slow).mean()
+    # MACD slope = your "angle"
+    df["macd_slope"] = df["macd"] - df["macd"].shift(1)
 
-    # STATE
-    df["trend"] = df["fast_ma"] > df["slow_ma"]
-    df["pullback"] = df["close"] < df["fast_ma"]
-    df["oversold"] = df["rsi"] < 35
+    # =========================
+    # 🔥 CONDITIONS
+    # =========================
 
-    # 🔥 NEW TRIGGER (BALANCED)
-    df["trigger"] = df["close"] > df["open"]
+    # Trend filter (simple proxy)
+    df["fast_ma"] = df["close"].rolling(20).mean()
+    df["slow_ma"] = df["close"].rolling(50).mean()
+    trend = df["fast_ma"] > df["slow_ma"]
 
-    # SIGNAL
+    # MACD crossover
+    macd_cross = df["macd"] > df["signal_line"]
+
+    # Momentum (angle)
+    momentum = df["macd_slope"] > 0
+
+    # Strong momentum (acceleration)
+    strong_momentum = df["macd_slope"] > df["macd_slope"].rolling(5).mean()
+
+    # Volume confirmation
+    df["vol_avg"] = df["volume"].rolling(20).mean()
+    volume_confirm = df["volume"] > df["vol_avg"] * 1.5
+
+    # =========================
+    # 🔥 SIGNAL (YOUR EDGE)
+    # =========================
     df["signal"] = (
-        df["trend"] &
-        df["pullback"] &
-        df["oversold"] &
-        df["trigger"]
+        trend &
+        macd_cross &
+        momentum &
+        strong_momentum &
+        volume_confirm
     ).astype(int)
 
-    # POSITION + EXIT
+    # =========================
+    # POSITION LOGIC
+    # =========================
     df["position"] = df["signal"]
 
+    # Exit when momentum dies
     df["exit"] = (
-        (df["rsi"] > 50) |
-        (df["close"] > df["slow_ma"])
+        (df["macd"] < df["signal_line"]) |
+        (df["macd_slope"] < 0)
     ).astype(int)
 
     df["position"] = df["position"].replace(0, pd.NA).ffill().fillna(0)
     df.loc[df["exit"] == 1, "position"] = 0
 
+    # =========================
+    # RETURNS
+    # =========================
     df["returns"] = df["close"].pct_change()
     df["strategy_returns"] = df["position"].shift(1) * df["returns"]
 
-    sharpe = df["strategy_returns"].mean() / df["strategy_returns"].std()
+    std = df["strategy_returns"].std()
+    sharpe = df["strategy_returns"].mean() / std if std != 0 else 0
 
     return {
         "strategy": strategy,
         "symbols": symbols,
-        "sharpe": float(round(sharpe, 3)) if pd.notna(sharpe) else 0.0,
+        "sharpe": float(round(sharpe, 3)),
         "maxDD": float(df["strategy_returns"].min()),
         "params": params
     }
