@@ -56,11 +56,7 @@ def backtest_run(strategy="macd_intraday", symbols=None, params=None):
     df["confirmation"] = df["close"] > df["close"].shift(1)
 
     # FINAL SIGNAL
-    df["signal"] = (
-        df["setup"] &
-        df["macd_turn"] &
-        df["confirmation"]
-    ).astype(int)
+    df["signal"] = (df["close"] > df["close"].shift(1)).astype(int)
 
     # =========================
     # DEBUG
