@@ -1,82 +1,82 @@
-print("RUNNING REAL BACKTEST FILE")
-
 import pandas as pd
+import numpy as np
 
+def backtest_run(strategy="macd_intraday", symbols=None, params=None):
 
-def backtest_run(strategy="macd_momentum", symbols=None, params=None):
+    print("RUNNING REAL BACKTEST FILE")
 
-    symbols = symbols or ["SPY"]
-    params = params or {}
-
+    # =========================
+    # LOAD DATA
+    # =========================
     df = pd.read_csv("aegis/data_storage/SPY.csv")
 
-    # =========================
-    # 🔥 MACD CORE
-    # =========================
-    ema_fast = df["close"].ewm(span=12).mean()
-    ema_slow = df["close"].ewm(span=26).mean()
-
-    df["macd"] = ema_fast - ema_slow
-    df["signal_line"] = df["macd"].ewm(span=9).mean()
-
-    # MACD slope = your "angle"
-    df["macd_slope"] = df["macd"] - df["macd"].shift(1)
+    # Convert timestamp if needed
+    if "timestamp" in df.columns:
+        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
 
     # =========================
-    # 🔥 CONDITIONS
+    # INDICATORS
     # =========================
 
-    # Trend filter (simple proxy)
-    df["fast_ma"] = df["close"].rolling(20).mean()
-    df["slow_ma"] = df["close"].rolling(50).mean()
-    trend = df["fast_ma"] > df["slow_ma"]
+    # MACD (custom fast version)
+    fast_ema = df["close"].ewm(span=5, adjust=False).mean()
+    slow_ema = df["close"].ewm(span=13, adjust=False).mean()
 
-    # MACD crossover
-    macd_cross = df["macd"] > df["signal_line"]
+    df["macd"] = fast_ema - slow_ema
+    df["signal_line"] = df["macd"].ewm(span=4, adjust=False).mean()
+    df["macd_hist"] = df["macd"] - df["signal_line"]
 
-    # Momentum (angle)
-    momentum = df["macd_slope"] > 0
+    # RSI (short for intraday)
+    delta = df["close"].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(2).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(2).mean()
+    rs = gain / loss
+    df["rsi"] = 100 - (100 / (1 + rs))
 
-    # Strong momentum (acceleration)
-    strong_momentum = df["macd_slope"] > df["macd_slope"].rolling(5).mean()
-
-    # Volume confirmation
+    # Volume filter
     df["vol_avg"] = df["volume"].rolling(20).mean()
-    volume_confirm = df["volume"] > df["vol_avg"] * 1.5
 
     # =========================
-    # 🔥 SIGNAL (YOUR EDGE)
+    # 🔥 KEY FIX — ENTRY LOGIC
     # =========================
+
+    # Setup conditions (not entry yet)
+    df["setup"] = (
+        (df["rsi"] < 30) &                    # oversold
+        (df["volume"] > df["vol_avg"])       # volume confirmation
+    )
+
+    # MACD turning upward (momentum shift)
+    df["macd_turn"] = (
+        (df["macd"] > df["macd"].shift(1)) &
+        (df["macd_hist"] > df["macd_hist"].shift(1))
+    )
+
+    # 🔥 CONFIRMATION (THIS IS YOUR EDGE)
+    df["confirmation"] = df["close"] > df["close"].shift(1)
+
+    # FINAL SIGNAL
     df["signal"] = (
-        trend &
-        macd_cross &
-        momentum &
-        strong_momentum &
-        volume_confirm
+        df["setup"] &
+        df["macd_turn"] &
+        df["confirmation"]
     ).astype(int)
-
-    # =========================
-    # POSITION LOGIC
-    # =========================
-    df["position"] = df["signal"]
-
-    # Exit when momentum dies
-    df["exit"] = (
-        (df["macd"] < df["signal_line"]) |
-        (df["macd_slope"] < 0)
-    ).astype(int)
-
-    df["position"] = df["position"].replace(0, pd.NA).ffill().fillna(0)
-    df.loc[df["exit"] == 1, "position"] = 0
 
     # =========================
     # RETURNS
     # =========================
     df["returns"] = df["close"].pct_change()
-    df["strategy_returns"] = df["position"].shift(1) * df["returns"]
+    df["strategy_returns"] = df["signal"].shift(1) * df["returns"]
 
+    # =========================
+    # PERFORMANCE
+    # =========================
     std = df["strategy_returns"].std()
-    sharpe = df["strategy_returns"].mean() / std if std != 0 else 0
+
+    if std == 0 or np.isnan(std):
+        sharpe = 0
+    else:
+        sharpe = df["strategy_returns"].mean() / std
 
     return {
         "strategy": strategy,
