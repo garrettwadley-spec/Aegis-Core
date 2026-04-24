@@ -63,6 +63,11 @@ def backtest_run(strategy="macd_intraday", symbols=None, params=None):
     ).astype(int)
 
     # =========================
+    # DEBUG
+    # =========================
+    print("Total signals:", df["signal"].sum())
+
+    # =========================
     # RETURNS
     # =========================
     df["returns"] = df["close"].pct_change()
