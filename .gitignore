@@ -39,3 +39,9 @@ plots/
 
 # Jupyter
 .ipynb_checkpoints/
+
+# Local generated datasets - do not commit
+combined_data.csv
+combined_data_part_*.parquet
+features_data.parquet
+*.parquet
