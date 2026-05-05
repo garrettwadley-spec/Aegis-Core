@@ -5,9 +5,7 @@ cd C:\Users\garre\cloud-trader
 Write-Host "Running strategy..."
 python -m aegis.discovery.strategy_runner
 
-Write-Host "Committing changes..."
-git add .
-git commit -m "auto run update"
-git push
+Write-Host "Checking git status..."
+git status
 
-Write-Host "DONE"
+Write-Host "Done. Review changes manually before committing."
