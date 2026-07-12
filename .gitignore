@@ -1,47 +1,75 @@
 # Python
 __pycache__/
-*.pyc
+*.py[cod]
 *.pyo
 *.pyd
 *.egg-info/
 dist/
 build/
 
-# Virtual envs
+# Virtual environments
 .venv/
 venv/
 ENV/
 env/
 
-# Local config / secrets
+# Secrets and credentials
 .env
+*.env.local
+*.env.backup
 *.key
 *.pem
 
-# OS / IDE
+# OS and IDE
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
+*.lnk
 
-# Logs / runtime
+# Unrelated local projects
+AI AGENT/
+
+# Logs and runtime
 *.log
 logs/
 
-# Local run artifacts (machine-specific)
-aegis_start_work_pack/runs/
-aegis_start_work_pack/runs/*.json
+# Backups and archives
+backups/
+*.zip
+BACKUP FILES/
+BACK UP FILES/
+**/BACKUP FILES/
+**/BACK UP FILES/
 
-# Artifacts (keep runs if you want tracked—see note below)
- runs/
+# Generated data and artifacts
 data/
 plots/
+runs/
+aegis_start_work_pack/runs/
+*.parquet
+*.db
+*.sqlite
+*.sqlite3
+combined_data.csv
+combined_data_part_*.parquet
+features_data.parquet
+
+# Generated E*TRADE helper configuration
+aegis_start_work_pack/brokers/E-Trade/tools helpers/config/
+aegis_start_work_pack/brokers/E-Trade/tools helpers/config/**
+
+# Generated strategy results
+aegis/memory/strategy_results.json
 
 # Jupyter
 .ipynb_checkpoints/
 
-# Local generated datasets - do not commit
-combined_data.csv
-combined_data_part_*.parquet
-features_data.parquet
-*.parquet
+# Temporary files
+*.tmp
+*.bak
+*A-etrade_get_accounts.py
+
+# Tool caches
+.pytest_cache/
+.mypy_cache/
