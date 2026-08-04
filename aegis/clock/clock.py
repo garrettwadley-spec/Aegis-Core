@@ -34,8 +34,8 @@ class Clock:
     def __init__(self) -> None:
         self._lock = Lock()
         self._mode: ClockMode = ClockMode.LIVE
-        # Sequence generator owns all sequence numbers
-        self._seq = SequenceGenerator(start=0)
+        # Sequence generator owns all sequence numbers; default starts at 1
+        self._seq = SequenceGenerator()
         # Monotonic base captured at init to produce monotonic times
         self._monotonic_base = system_monotonic()
         # Replay control
@@ -129,8 +129,8 @@ class Clock:
 
             seq_start = kwargs.get("sequence_start")
             if isinstance(seq_start, int) and seq_start >= 0:
-                # re-seed sequence generator safely
-                self._seq = SequenceGenerator(start=seq_start)
+                # re-seed sequence generator so that the first returned value equals seq_start
+                self._seq = SequenceGenerator(seed=seq_start)
             # reset replay counters
             self._replay_call_count = 0
 
