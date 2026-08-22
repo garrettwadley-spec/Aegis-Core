@@ -24,11 +24,6 @@ class TestOrdering(unittest.TestCase):
         bus.publish(e3)
         bus.dispatch()
         self.assertEqual(sub.received, ["seq.type", "seq.type", "seq.type"])  # event_type preserved
-        # validate sequence numbers monotonic
-        # we can inspect received events via sequence_number
-        seqs = [evt.sequence_number for evt in getattr(sub, "received_events", sub.received)]
-        # If subscriber stored events as strings above, we can't inspect numbers; instead republish properly
-        # Re-run with subscriber that captures events
 
 class OrderingCaptureSubscriber(Subscriber):
     def __init__(self):
