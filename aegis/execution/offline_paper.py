@@ -18,7 +18,11 @@ from aegis.execution.order_models import (
     TradeRequest,
 )
 from aegis.execution.order_router import OrderRouter
-from aegis.marketdata import MarketData
+from aegis.marketdata import (
+    CANONICAL_REPLAY_STRATEGY_EVIDENCE,
+    MarketData,
+    OpeningRangeFactors,
+)
 from aegis.snapshot import MarketSnapshot
 from aegis.strategies import MarketSignal
 
@@ -141,6 +145,9 @@ class PaperDecisionService:
         self,
         signal: MarketSignal | None,
         snapshot: MarketSnapshot,
+        *,
+        opening_range_factors: OpeningRangeFactors | None = None,
+        learning_eligibility: str | None = None,
     ) -> RecordedPaperDecision | None:
         request = self._bridge.create_request(signal)
         if request is None or signal is None:
@@ -150,6 +157,12 @@ class PaperDecisionService:
             snapshot,
             request.symbol,
         )
+        if opening_range_factors is not None:
+            self._validate_factor_provenance(
+                opening_range_factors,
+                market_data,
+                source_sequence,
+            )
         try:
             LaunchSafetyGate.validate(request, market_data.last, signal)
         except ValueError as exc:
@@ -174,6 +187,8 @@ class PaperDecisionService:
             source_sequence,
             request,
             result,
+            opening_range_factors,
+            learning_eligibility,
         )
         record_path = self._journal.append(record)
         return RecordedPaperDecision(request, result, record, record_path)
@@ -192,6 +207,19 @@ class PaperDecisionService:
         raise ValueError(f"snapshot does not contain signal symbol {symbol}")
 
     @staticmethod
+    def _validate_factor_provenance(
+        factors: OpeningRangeFactors,
+        market_data: MarketData,
+        source_sequence: int,
+    ) -> None:
+        if factors.symbol != market_data.symbol:
+            raise ValueError("factor symbol does not match decision symbol")
+        if factors.current_price != market_data.last:
+            raise ValueError("factor current price does not match decision price")
+        if source_sequence not in factors.source_event_sequences:
+            raise ValueError("factor provenance does not include decision event")
+
+    @staticmethod
     def _record(
         signal: MarketSignal,
         snapshot: MarketSnapshot,
@@ -199,6 +227,8 @@ class PaperDecisionService:
         source_sequence: int,
         request: TradeRequest,
         result: ExecutionResult,
+        opening_range_factors: OpeningRangeFactors | None,
+        learning_eligibility: str | None,
     ) -> dict[str, Any]:
         broker_response = result.broker_response or {}
         paper_order_id = broker_response.get("paper_order_id")
@@ -222,7 +252,7 @@ class PaperDecisionService:
             "confidence": request.confidence,
             "mode": request.mode.value,
         }
-        return {
+        record = {
             "decision_record_id": decision_record_id,
             "timestamp": result.timestamp_utc,
             "symbol": request.symbol,
@@ -245,3 +275,50 @@ class PaperDecisionService:
             "correlation_id": snapshot.correlation_id,
             "input_origin": INPUT_ORIGIN,
         }
+        if opening_range_factors is not None:
+            record.update(
+                {
+                    "opening_range_factors_id": (
+                        opening_range_factors.object_id
+                    ),
+                    "opening_range_factors_as_of": (
+                        opening_range_factors.as_of.isoformat()
+                    ),
+                    "strategy_factors": {
+                        "session_open_price": (
+                            opening_range_factors.session_open_price
+                        ),
+                        "current_price": opening_range_factors.current_price,
+                        "relative_volume": (
+                            opening_range_factors.relative_volume
+                        ),
+                        "price_change_pct": (
+                            opening_range_factors.price_change_pct
+                        ),
+                        "rsi": opening_range_factors.rsi,
+                        "macd": opening_range_factors.macd,
+                        "macd_signal": opening_range_factors.macd_signal,
+                        "macd_cross_up_below_zero": (
+                            opening_range_factors.macd_cross_up_below_zero
+                        ),
+                    },
+                    "factor_calculation_config": (
+                        opening_range_factors.calculation_config.to_dict()
+                    ),
+                    "factor_source_market_data_ids": list(
+                        opening_range_factors.source_market_data_ids
+                    ),
+                    "factor_source_event_sequences": list(
+                        opening_range_factors.source_event_sequences
+                    ),
+                    "factor_prior_sessions": list(
+                        opening_range_factors.prior_sessions_used
+                    ),
+                    "input_origin": opening_range_factors.input_origin,
+                    "learning_eligibility": (
+                        learning_eligibility
+                        or CANONICAL_REPLAY_STRATEGY_EVIDENCE
+                    ),
+                }
+            )
+        return record

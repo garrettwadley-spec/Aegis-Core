@@ -61,7 +61,9 @@ def evaluate_decision_outcome(
         correlation_id=str(decision_record["correlation_id"]),
         evaluation_horizon=EVALUATION_HORIZON,
         input_origin=str(decision_record["input_origin"]),
-        learning_eligibility=LEARNING_ELIGIBILITY,
+        learning_eligibility=str(
+            decision_record.get("learning_eligibility", LEARNING_ELIGIBILITY)
+        ),
     )
 
 
