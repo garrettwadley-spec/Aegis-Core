@@ -64,6 +64,20 @@ def evaluate_decision_outcome(
         learning_eligibility=str(
             decision_record.get("learning_eligibility", LEARNING_ELIGIBILITY)
         ),
+        source_provider=market_data.metadata.get("source_provider"),
+        source_provider_confidence=market_data.metadata.get(
+            "source_provider_confidence"
+        ),
+        source_file=market_data.metadata.get("source_file"),
+        source_file_sha256=market_data.metadata.get("source_file_sha256"),
+        source_symbol=market_data.metadata.get("source_symbol"),
+        source_session=market_data.metadata.get("source_session"),
+        source_timezone=market_data.metadata.get("source_timezone"),
+        source_row_identifier=market_data.metadata.get(
+            "source_row_identifier"
+        ),
+        volume_semantics=market_data.metadata.get("volume_semantics"),
+        code_commit=market_data.metadata.get("code_commit"),
     )
 
 

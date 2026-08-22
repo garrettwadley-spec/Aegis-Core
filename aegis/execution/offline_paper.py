@@ -321,4 +321,20 @@ class PaperDecisionService:
                     ),
                 }
             )
+        if market_data.metadata.get("observation_type") == "OHLCV_BAR":
+            record["dataset_provenance"] = {
+                key: market_data.metadata.get(key)
+                for key in (
+                    "source_provider",
+                    "source_provider_confidence",
+                    "source_file",
+                    "source_file_sha256",
+                    "source_symbol",
+                    "source_session",
+                    "source_timezone",
+                    "source_row_identifier",
+                    "volume_semantics",
+                    "code_commit",
+                )
+            }
         return record
