@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
+
+from aegis.clock import system_clock
 
 
 class OrderSide(str, Enum):
@@ -20,6 +21,7 @@ class ExecutionStatus(str, Enum):
     ACCEPTED = "accepted"
     REJECTED = "rejected"
     PREVIEWED = "previewed"
+    FILLED = "filled"
     FAILED = "failed"
 
 
@@ -62,7 +64,7 @@ class ExecutionResult:
 
     def __post_init__(self) -> None:
         if not self.timestamp_utc:
-            self.timestamp_utc = datetime.now(timezone.utc).isoformat()
+            self.timestamp_utc = system_clock.now().isoformat()
 
     def to_dict(self) -> dict[str, Any]:
         result = asdict(self)
