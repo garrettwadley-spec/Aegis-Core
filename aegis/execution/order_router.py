@@ -47,10 +47,19 @@ class OrderRouter:
             )
 
         if response.get("ok"):
+            filled = response.get("status") == ExecutionStatus.FILLED.value
             return ExecutionResult(
-                status=ExecutionStatus.PREVIEWED,
+                status=(
+                    ExecutionStatus.FILLED
+                    if filled
+                    else ExecutionStatus.PREVIEWED
+                ),
                 request=request,
-                message="Order preview accepted by broker.",
+                message=(
+                    "Offline paper order filled."
+                    if filled
+                    else "Order preview accepted by broker."
+                ),
                 broker_response=response,
             )
 
