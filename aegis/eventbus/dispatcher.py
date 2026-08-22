@@ -8,8 +8,9 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
-from time import perf_counter
 from typing import Deque, Dict, List, Tuple
+
+from aegis.clock import system_clock
 
 from .event import Event
 from .subscription import Subscription
@@ -44,13 +45,13 @@ class Dispatcher:
         while self._queue:
             queued = self._queue.popleft()
             event = queued.event
-            start = perf_counter()
+            start = system_clock.monotonic()
             subs = subscriptions.get(event.event_type, [])
             # If no subscribers, skip but continue determinism
             for sub in subs:
                 # Synchronous delivery
                 sub.subscriber.receive(event)
                 delivered += 1
-                latency = perf_counter() - start
+                latency = system_clock.monotonic() - start
                 deliveries.append((sub, event, latency))
         return deliveries, delivered

@@ -1,10 +1,21 @@
 """Unit tests for domain identity and core behaviors."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import unittest
+from unittest.mock import patch
+from aegis.clock import system_clock
 from aegis.domain import Identity, DomainObject, Entity, to_dict, from_dict
 
 class TestIdentity(unittest.TestCase):
+    def test_default_timestamp_comes_from_clock(self):
+        expected = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+        with patch.object(system_clock, "now", return_value=expected) as clock_now:
+            domain_object = DomainObject()
+
+        self.assertEqual(domain_object.created_at, expected)
+        clock_now.assert_called_once_with()
+
     def test_identity_uniqueness(self):
         a = Identity.new()
         b = Identity.new()

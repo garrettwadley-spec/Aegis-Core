@@ -5,9 +5,11 @@ Immutable Event objects.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Optional
 import uuid
+
+from aegis.clock import system_clock
 
 @dataclass(frozen=True)
 class Event:
@@ -36,7 +38,7 @@ class Event:
 
         sequence_number is intentionally left as None and assigned by EventBus.publish.
         """
-        now = datetime.now(timezone.utc)
+        now = system_clock.now()
         return cls(
             event_id=str(uuid.uuid4()),
             event_type=event_type,

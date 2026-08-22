@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import unittest
+from aegis.clock import ClockMode, system_clock
 from aegis.eventbus import EventBus, Event, Subscriber
 
 class OrderingSubscriber(Subscriber):
@@ -32,6 +33,28 @@ class OrderingCaptureSubscriber(Subscriber):
         self.received.append(event)
 
 class TestOrderingCapture(unittest.TestCase):
+    def test_event_bus_uses_process_clock_sequence(self):
+        system_clock.set_mode(ClockMode.LIVE, sequence_start=100)
+        try:
+            first_bus = EventBus()
+            second_bus = EventBus()
+            first = OrderingCaptureSubscriber()
+            second = OrderingCaptureSubscriber()
+            first_bus.subscribe("seq.type", first)
+            second_bus.subscribe("seq.type", second)
+
+            first_bus.publish(Event.create("seq.type", {"v": "A"}))
+            clock_sequence = system_clock.sequence()
+            second_bus.publish(Event.create("seq.type", {"v": "B"}))
+            first_bus.dispatch()
+            second_bus.dispatch()
+
+            self.assertEqual(first.received[0].sequence_number, 100)
+            self.assertEqual(clock_sequence, 101)
+            self.assertEqual(second.received[0].sequence_number, 102)
+        finally:
+            system_clock.set_mode(ClockMode.LIVE)
+
     def test_ordering_sequence_numbers_monotonic(self):
         bus = EventBus()
         sub = OrderingCaptureSubscriber()

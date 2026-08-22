@@ -9,8 +9,8 @@ class Publisher:
     """Lightweight publisher utility.
 
     Publisher exists mainly for conceptual separation. The EventBus governs
-    sequence numbers and queueing; Publisher provides a convenience wrapper
-    for creating and publishing events with typed payloads.
+    queueing while the Clock governs sequence numbers; Publisher provides a
+    convenience wrapper for creating and publishing events with typed payloads.
     """
 
     def __init__(self, bus: "EventBus") -> None:  # type: ignore[name-defined]

@@ -16,7 +16,8 @@ from .trace import TraceContext
 from .correlation import CorrelationContext
 from .metadata import Metadata
 from .timestamp import Timestamp
-from aegis.clock.utc import ensure_utc, utc_now
+from aegis.clock import system_clock
+from aegis.clock.utc import ensure_utc
 
 
 @dataclass(frozen=True)
@@ -34,14 +35,14 @@ class DomainObject:
 
     object_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     version: int = field(default=1)
-    created_at: datetime = field(default_factory=utc_now)
+    created_at: datetime = field(default_factory=lambda: system_clock.now())
     trace_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     correlation_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     _metadata: Optional[Mapping[str, Any]] = field(default=None, repr=False)
 
     def __post_init__(self) -> None:  # type: ignore[override]
         # Normalize created_at to timezone-aware UTC and freeze metadata
-        ca = ensure_utc(self.created_at)
+        ca = system_clock.now() if self.created_at is None else ensure_utc(self.created_at)
         meta = self._metadata or {}
         if not isinstance(meta, Mapping):
             meta = dict(meta)

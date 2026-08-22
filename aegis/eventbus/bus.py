@@ -8,16 +8,17 @@ Public interface (required):
 
 Guarantees:
 - Immutable Event objects (Event is frozen).
-- Deterministic ordering via internal sequence numbers and FIFO queue.
+- Deterministic ordering via Clock sequence numbers and FIFO queue.
 - Publish/Subscribe model with multiple subscribers supported.
 - No external dependencies.
 """
 from __future__ import annotations
 
 from threading import Lock
-from typing import Any, Dict, List, Optional, Tuple
-from time import perf_counter
+from typing import Any, Dict, List
 import uuid
+
+from aegis.clock import system_clock
 
 from .event import Event
 from .receipt import Receipt
@@ -36,33 +37,15 @@ class EventBus:
     def __init__(self) -> None:
         self._lock = Lock()
         self._subscriptions: Dict[str, List[Subscription]] = {}
-        self._sequence_counter = 0
         self._dispatcher = Dispatcher()
-
-    def _next_sequence(self) -> int:
-        with self._lock:
-            self._sequence_counter += 1
-            return self._sequence_counter
 
     def publish(self, event: Event) -> Receipt:
         """Publish an Event to the bus.
 
-        The EventBus assigns a deterministic sequence number and queues the
-        event for dispatch. Returns a Receipt acknowledging queuing.
+        The EventBus obtains a deterministic sequence number from the Clock
+        and queues the event for dispatch. Returns a Receipt acknowledging queuing.
         """
-        if event.sequence_number is not None:
-            # Respect provided sequence_number but ensure monotonicity by
-            # assigning a new one if lower than current counter.
-            with self._lock:
-                if event.sequence_number <= self._sequence_counter:
-                    seq = self._next_sequence()
-                else:
-                    self._sequence_counter = event.sequence_number
-                    seq = event.sequence_number
-        else:
-            seq = self._next_sequence()
-
-        event_with_seq = event.with_sequence(seq)
+        event_with_seq = event.with_sequence(system_clock.sequence())
 
         # Count targeted subscribers deterministically
         target_subs = list(self._subscriptions.get(event_with_seq.event_type, []))

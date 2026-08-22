@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import unittest
+from aegis.domain import DomainObject
 from aegis.eventbus import EventBus, Event, Subscriber
 
 class PassthroughSubscriber(Subscriber):
@@ -11,6 +12,29 @@ class PassthroughSubscriber(Subscriber):
         self.received.append(event)
 
 class TestDispatch(unittest.TestCase):
+    def test_domain_object_payload_is_preserved(self):
+        bus = EventBus()
+        subscriber = PassthroughSubscriber()
+        payload = DomainObject()
+        bus.subscribe("domain.payload", subscriber)
+
+        bus.publish(Event.create("domain.payload", payload))
+        bus.dispatch()
+
+        self.assertIs(subscriber.received[0].payload, payload)
+
+    def test_mutable_payload_is_not_mutated(self):
+        bus = EventBus()
+        subscriber = PassthroughSubscriber()
+        payload = {"items": ["A", "B"]}
+        bus.subscribe("mutable.payload", subscriber)
+
+        bus.publish(Event.create("mutable.payload", payload))
+        bus.dispatch()
+
+        self.assertEqual(payload, {"items": ["A", "B"]})
+        self.assertIs(subscriber.received[0].payload, payload)
+
     def test_unknown_event_types_do_not_fail(self):
         bus = EventBus()
         # no subscribers for this type
