@@ -2,6 +2,24 @@
 
 from .bus import MARKET_DATA_RECEIVED, MarketDataBus
 from .history import CanonicalMarketHistory, MarketHistoryObservation
+from .historical_bars import (
+    OHLCV_OBSERVATION_TYPE,
+    PER_BAR_VOLUME,
+    REAL_HISTORICAL_FACTOR_ORIGIN,
+    REAL_HISTORICAL_LEARNING_ELIGIBILITY,
+    SESSION_TIMEZONE,
+    SOURCE_TIMEZONE,
+    STOOQ_STYLE_PROVIDER,
+    STOOQ_STYLE_PROVIDER_CONFIDENCE,
+    HistoricalBar,
+    HistoricalBarReplayAdapter,
+    TimezoneValidationSample,
+    VolumeSemantics,
+    determine_volume_semantics,
+    file_sha256,
+    load_stooq_style_bars,
+    validate_timezone_sessions,
+)
 from .models import MarketData, RawMarketData, normalize_market_data
 from .orb_factors import (
     CANONICAL_FACTOR_ORIGIN,
@@ -22,6 +40,8 @@ __all__ = [
     "CANONICAL_FACTOR_ORIGIN",
     "CANONICAL_REPLAY_STRATEGY_EVIDENCE",
     "CanonicalMarketHistory",
+    "HistoricalBar",
+    "HistoricalBarReplayAdapter",
     "InsufficientHistoryError",
     "InvalidMarketHistoryError",
     "MARKET_DATA_RECEIVED",
@@ -32,10 +52,24 @@ __all__ = [
     "OpeningRangeCalculationConfig",
     "OpeningRangeFactorCalculator",
     "OpeningRangeFactors",
+    "OHLCV_OBSERVATION_TYPE",
+    "PER_BAR_VOLUME",
+    "REAL_HISTORICAL_FACTOR_ORIGIN",
+    "REAL_HISTORICAL_LEARNING_ELIGIBILITY",
     "RawMarketData",
     "ReplaySource",
+    "SESSION_TIMEZONE",
+    "SOURCE_TIMEZONE",
+    "STOOQ_STYLE_PROVIDER",
+    "STOOQ_STYLE_PROVIDER_CONFIDENCE",
     "SYNTHETIC_FACTOR_ORIGIN",
+    "TimezoneValidationSample",
+    "VolumeSemantics",
     "calculate_macd",
     "calculate_wilder_rsi",
+    "determine_volume_semantics",
+    "file_sha256",
+    "load_stooq_style_bars",
     "normalize_market_data",
+    "validate_timezone_sessions",
 ]

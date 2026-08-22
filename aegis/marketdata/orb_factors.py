@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from hashlib import sha256
-from math import isclose
+from math import isclose, isfinite
 from types import MappingProxyType
 from typing import Any, Iterable
 from zoneinfo import ZoneInfo
@@ -264,9 +264,22 @@ class OpeningRangeFactorCalculator:
             slow_period=self._config.macd_slow_period,
             signal_period=self._config.macd_signal_period,
         )
-        session_open_price = current_entries[0].market_data.last
-        if session_open_price == 0:
-            raise InvalidMarketHistoryError("session open price cannot be zero")
+        first_regular_observation = current_entries[0].market_data
+        source_open = first_regular_observation.metadata.get("source_open")
+        try:
+            session_open_price = (
+                first_regular_observation.last
+                if source_open is None
+                else float(source_open)
+            )
+        except (TypeError, ValueError) as exc:
+            raise InvalidMarketHistoryError(
+                "source_open must be numeric when present"
+            ) from exc
+        if not isfinite(session_open_price) or session_open_price <= 0:
+            raise InvalidMarketHistoryError(
+                "session open price must be finite and positive"
+            )
         price_change_pct = (
             (current.market_data.last - session_open_price)
             / session_open_price

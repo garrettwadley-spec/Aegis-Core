@@ -35,11 +35,13 @@ from aegis.strategies import (
 
 
 def observation(symbol: str = "SPY", last: float = 645.36) -> RawMarketData:
+    bid = max(last - 0.02, 0.0)
+    ask = max(last + 0.02, bid)
     return RawMarketData(
         symbol=symbol,
         exchange="ARCX",
-        bid=last - 0.02,
-        ask=last + 0.02,
+        bid=bid,
+        ask=ask,
         last=last,
         volume=1_000,
         source="replay",

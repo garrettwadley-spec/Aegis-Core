@@ -26,6 +26,16 @@ class RecordedDecisionOutcome:
     evaluation_horizon: str
     input_origin: str
     learning_eligibility: str
+    source_provider: str | None = None
+    source_provider_confidence: str | None = None
+    source_file: str | None = None
+    source_file_sha256: str | None = None
+    source_symbol: str | None = None
+    source_session: str | None = None
+    source_timezone: str | None = None
+    source_row_identifier: str | None = None
+    volume_semantics: str | None = None
+    code_commit: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         record = asdict(self)
