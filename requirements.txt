@@ -1,0 +1,10 @@
+fastapi==0.121.1
+httpx==0.28.1
+numpy==2.3.4
+pandas==2.3.3
+pydantic==2.12.4
+python-dotenv==1.1.1
+PyYAML==6.0.3
+requests==2.31.0
+requests-oauthlib==2.0.0
+uvicorn[standard]==0.38.0
