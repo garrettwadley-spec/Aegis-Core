@@ -1,6 +1,16 @@
 """Canonical market-data ingestion for Aegis."""
 
 from .bus import MARKET_DATA_RECEIVED, MarketDataBus
+from .alpaca_stream import (
+    ALPACA_CREDENTIAL_VARIABLES,
+    MAX_LIVE_SYMBOLS,
+    AlpacaStockStreamAdapter,
+    AlpacaStreamMode,
+    AlpacaSubscriptionStatus,
+    MissingAlpacaCredentialsError,
+    credential_variables_present,
+    normalize_alpaca_message,
+)
 from .history import CanonicalMarketHistory, MarketHistoryObservation
 from .historical_bars import (
     OHLCV_OBSERVATION_TYPE,
@@ -21,6 +31,25 @@ from .historical_bars import (
     validate_timezone_sessions,
 )
 from .models import MarketData, RawMarketData, normalize_market_data
+from .live_bars import (
+    THIRTY_SECOND_BAR_CLOSED,
+    LateTradeRejection,
+    ThirtySecondBarBuilder,
+    completed_bar_signal_price,
+    future_buy_execution_reference,
+    future_sell_execution_reference,
+    interval_for,
+)
+from .live_bus import (
+    LIVE_QUOTE_RECEIVED,
+    LIVE_TRADE_RECEIVED,
+    LiveMarketDataBus,
+)
+from .live_models import LiveQuote, LiveTrade, OpeningRangeState, ThirtySecondBar
+from .opening_range_live import (
+    OPENING_RANGE_COMPLETED,
+    OpeningRangeBuilder,
+)
 from .orb_factors import (
     CANONICAL_FACTOR_ORIGIN,
     CANONICAL_REPLAY_STRATEGY_EVIDENCE,
@@ -37,6 +66,10 @@ from .orb_factors import (
 from .replay import ReplaySource
 
 __all__ = [
+    "ALPACA_CREDENTIAL_VARIABLES",
+    "AlpacaStockStreamAdapter",
+    "AlpacaStreamMode",
+    "AlpacaSubscriptionStatus",
     "CANONICAL_FACTOR_ORIGIN",
     "CANONICAL_REPLAY_STRATEGY_EVIDENCE",
     "CanonicalMarketHistory",
@@ -44,14 +77,25 @@ __all__ = [
     "HistoricalBarReplayAdapter",
     "InsufficientHistoryError",
     "InvalidMarketHistoryError",
+    "LIVE_QUOTE_RECEIVED",
+    "LIVE_TRADE_RECEIVED",
+    "LateTradeRejection",
+    "LiveMarketDataBus",
+    "LiveQuote",
+    "LiveTrade",
     "MARKET_DATA_RECEIVED",
     "MACDCalculation",
+    "MAX_LIVE_SYMBOLS",
     "MarketData",
     "MarketDataBus",
     "MarketHistoryObservation",
+    "MissingAlpacaCredentialsError",
+    "OPENING_RANGE_COMPLETED",
     "OpeningRangeCalculationConfig",
+    "OpeningRangeBuilder",
     "OpeningRangeFactorCalculator",
     "OpeningRangeFactors",
+    "OpeningRangeState",
     "OHLCV_OBSERVATION_TYPE",
     "PER_BAR_VOLUME",
     "REAL_HISTORICAL_FACTOR_ORIGIN",
@@ -63,13 +107,22 @@ __all__ = [
     "STOOQ_STYLE_PROVIDER",
     "STOOQ_STYLE_PROVIDER_CONFIDENCE",
     "SYNTHETIC_FACTOR_ORIGIN",
+    "THIRTY_SECOND_BAR_CLOSED",
+    "ThirtySecondBar",
+    "ThirtySecondBarBuilder",
     "TimezoneValidationSample",
     "VolumeSemantics",
     "calculate_macd",
     "calculate_wilder_rsi",
+    "completed_bar_signal_price",
+    "credential_variables_present",
     "determine_volume_semantics",
     "file_sha256",
+    "future_buy_execution_reference",
+    "future_sell_execution_reference",
+    "interval_for",
     "load_stooq_style_bars",
+    "normalize_alpaca_message",
     "normalize_market_data",
     "validate_timezone_sessions",
 ]
