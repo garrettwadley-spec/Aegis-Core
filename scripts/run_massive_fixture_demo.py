@@ -9,6 +9,7 @@ from aegis.marketdata import (
     LiveMarketDataBus,
     LiveQuote,
     LiveTrade,
+    MassiveDataMode,
     MassiveStockStreamAdapter,
     OpeningRangeBuilder,
     ThirtySecondBar,
@@ -40,6 +41,7 @@ def main() -> None:
                 live_bus.ingest(item),
             ),
             api_key="offline-fixture",
+            mode=MassiveDataMode.REALTIME_TRADES_QUOTES,
         )
         adapter.handle_message(
             {

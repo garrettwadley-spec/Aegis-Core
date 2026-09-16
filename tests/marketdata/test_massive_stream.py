@@ -12,9 +12,12 @@ from aegis.clock import ClockMode, system_clock
 from aegis.eventbus import EventBus
 from aegis.marketdata import (
     DEFAULT_MASSIVE_WS_URL,
+    MASSIVE_DELAYED_WS_URL,
+    MASSIVE_REALTIME_WS_URL,
     LiveMarketDataBus,
     LiveQuote,
     LiveTrade,
+    MassiveDataMode,
     MassiveStockStreamAdapter,
     OpeningRangeBuilder,
     ThirtySecondBar,
@@ -91,6 +94,7 @@ class MassiveTestCase(unittest.TestCase):
             "symbols": ("SPY",),
             "observation_sink": (lambda item: None) if sink is None else sink,
             "api_key": "test-key",
+            "mode": MassiveDataMode.REALTIME_TRADES_QUOTES,
         }
         values.update(overrides)
         return MassiveStockStreamAdapter(**values)
@@ -326,6 +330,123 @@ class TestMassivePipelineAndMetrics(MassiveTestCase):
         self.assertIn("Dropped: 0", rendered)
 
 
+class TestMassiveDelayedMode(MassiveTestCase):
+    def delayed_adapter(self, sink=None, **overrides):
+        values = {
+            "symbols": ("SPY", "QQQ"),
+            "observation_sink": (lambda item: None) if sink is None else sink,
+            "api_key": "test-key",
+            "mode": MassiveDataMode.DELAYED_TRADES,
+        }
+        values.update(overrides)
+        return MassiveStockStreamAdapter(**values)
+
+    def test_delayed_mode_uses_delayed_endpoint_and_trade_topics_only(self):
+        adapter = self.delayed_adapter()
+        self.assertEqual(DEFAULT_MASSIVE_WS_URL, MASSIVE_DELAYED_WS_URL)
+        self.assertEqual(adapter.status.endpoint, MASSIVE_DELAYED_WS_URL)
+        self.assertEqual(adapter.status.requested_subscriptions, ("T.SPY", "T.QQQ"))
+        self.assertFalse(any(topic.startswith("Q.") for topic in adapter.status.requested_subscriptions))
+        self.assertEqual(adapter.subscription_message()["params"], "T.SPY,T.QQQ")
+
+    def test_delayed_mode_defaults_from_environment(self):
+        adapter = MassiveStockStreamAdapter.from_environment(
+            symbols=("SPY",),
+            observation_sink=lambda item: None,
+            environment={"MASSIVE_API_KEY": "test-key"},
+        )
+        self.assertEqual(adapter.status.mode, MassiveDataMode.DELAYED_TRADES)
+        self.assertEqual(adapter.status.endpoint, MASSIVE_DELAYED_WS_URL)
+        realtime = MassiveStockStreamAdapter.from_environment(
+            symbols=("SPY",),
+            observation_sink=lambda item: None,
+            environment={
+                "MASSIVE_API_KEY": "test-key",
+                "MASSIVE_DATA_MODE": "realtime",
+            },
+        )
+        self.assertEqual(realtime.status.mode, MassiveDataMode.REALTIME_TRADES_QUOTES)
+        self.assertEqual(realtime.status.endpoint, MASSIVE_REALTIME_WS_URL)
+        with self.assertRaises(ValueError):
+            MassiveStockStreamAdapter.from_environment(
+                symbols=("SPY",),
+                observation_sink=lambda item: None,
+                environment={
+                    "MASSIVE_API_KEY": "test-key",
+                    "MASSIVE_DATA_MODE": "unsupported",
+                },
+            )
+
+    def test_zero_quotes_is_valid_and_execution_reference_is_ineligible(self):
+        adapter = self.delayed_adapter(symbols=("SPY",))
+        adapter.handle_message(
+            {
+                "ev": "status",
+                "status": "success",
+                "message": "subscribed to: T.SPY",
+            }
+        )
+        self.assertTrue(adapter.status.subscribed)
+        self.assertEqual(adapter.status.quotes_received, 0)
+        self.assertEqual(adapter.status.rejected_subscriptions, ())
+        self.assertFalse(adapter.status.quote_entitlement)
+        self.assertFalse(adapter.status.execution_reference_eligible)
+        self.assertEqual(
+            adapter.status.execution_reference_classification,
+            "NOT_ELIGIBLE_FOR_LIVE_EXECUTION_REFERENCE",
+        )
+        self.assertEqual(
+            adapter.status.coverage_classification,
+            "FULL_MARKET_DELAYED_TRADES",
+        )
+        self.assertEqual(adapter.status.evidence_classification, "DELAYED_MARKET_DATA")
+
+    def test_trade_only_mode_builds_existing_bar_without_quote_or_flat_candle(self):
+        event_bus = EventBus()
+        live_bus = LiveMarketDataBus(event_bus)
+        builder = ThirtySecondBarBuilder(event_bus)
+        adapter = self.delayed_adapter(
+            symbols=("SPY",),
+            sink=lambda item: live_bus.ingest(item),
+        )
+        interval_start = datetime(2026, 1, 2, 14, 30, tzinfo=UTC)
+        adapter.handle_message(
+            trade_message(
+                t=milliseconds(interval_start + timedelta(seconds=5)),
+                p=500.10,
+                s=100,
+            )
+        )
+        adapter.handle_message(
+            trade_message(
+                t=milliseconds(interval_start + timedelta(seconds=20)),
+                p=500.25,
+                s=50,
+                i="M2",
+            )
+        )
+        builder.advance("SPY", interval_start + timedelta(minutes=1))
+        event_bus.dispatch()
+        self.assertEqual(len(builder.bars), 1)
+        bar = builder.bars[0]
+        self.assertIsInstance(bar, ThirtySecondBar)
+        self.assertEqual((bar.open, bar.high, bar.low, bar.close), (500.10, 500.25, 500.10, 500.25))
+        self.assertEqual((bar.volume, bar.trade_count), (150.0, 2))
+        self.assertIsNone(bar.latest_bid)
+        self.assertIsNone(bar.latest_ask)
+
+    def test_realtime_mode_retains_trade_and_quote_contract(self):
+        adapter = self.adapter(symbols=("SPY",))
+        self.assertEqual(adapter.status.endpoint, MASSIVE_REALTIME_WS_URL)
+        self.assertEqual(adapter.status.requested_subscriptions, ("T.SPY", "Q.SPY"))
+        self.assertTrue(adapter.status.quote_entitlement)
+        self.assertTrue(adapter.status.execution_reference_eligible)
+        self.assertEqual(
+            adapter.status.coverage_classification,
+            "REALTIME_TRADES_AND_NBBO_QUOTES",
+        )
+
+
 class _FailingConnect:
     def __init__(self) -> None:
         self.calls = 0
@@ -395,6 +516,7 @@ class TestMassiveConnectionLifecycle(unittest.IsolatedAsyncioTestCase):
             max_attempts=2,
             reconnect_delay_seconds=0,
             connect_factory=connector,
+            mode=MassiveDataMode.REALTIME_TRADES_QUOTES,
         )
         observations = await adapter.run(max_seconds=0.1)
         self.assertEqual(observations, ())
@@ -412,6 +534,7 @@ class TestMassiveConnectionLifecycle(unittest.IsolatedAsyncioTestCase):
             max_attempts=1,
             reconnect_delay_seconds=0,
             connect_factory=connector,
+            mode=MassiveDataMode.REALTIME_TRADES_QUOTES,
         )
         observations = await adapter.run(max_seconds=0.02)
         self.assertEqual(observations, ())

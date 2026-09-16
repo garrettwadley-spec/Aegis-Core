@@ -3,25 +3,33 @@
 ## Scope
 
 LAUNCH-011 makes Massive the primary live-capable U.S. equities market-data
-adapter for Aegis. It normalizes Massive stock trades and NBBO quotes into the
-existing provider-neutral `LiveTrade` and `LiveQuote` objects, then uses the
-unchanged `LiveMarketDataBus`, `ThirtySecondBarBuilder`, and
-`OpeningRangeBuilder`. The Alpaca adapter remains available as an inactive
-fallback/test integration.
+adapter for Aegis. LAUNCH-011D adds an explicit Developer-plan mode for
+15-minute-delayed trades while retaining the Advanced-plan real-time trade and
+NBBO quote contract. Both modes use the unchanged provider-neutral
+`LiveMarketDataBus`, `ThirtySecondBarBuilder`, and `OpeningRangeBuilder`. The
+Alpaca adapter remains available as an inactive fallback/test integration.
 
 This capability does not subscribe to all-market topics, run strategy logic,
 read brokerage state, or place orders.
 
 ## Connection
 
-The default endpoint is:
+The supported operating modes are:
+
+| Mode | Endpoint | Topics | Coverage | Execution reference |
+| --- | --- | --- | --- | --- |
+| `DELAYED_TRADES` | `wss://delayed.massive.com/stocks` | `T.SYMBOL` only | `FULL_MARKET_DELAYED_TRADES` | Not eligible |
+| `REALTIME_TRADES_QUOTES` | `wss://socket.massive.com/stocks` | `T.SYMBOL` and `Q.SYMBOL` | `REALTIME_TRADES_AND_NBBO_QUOTES` | Eligible by data contract |
+
+The default is `DELAYED_TRADES` until the account is upgraded and real-time mode
+is explicitly selected. The adapter sends the required authentication action
+and then one comma-separated subscription action. A delayed subscription is:
 
 ```text
-wss://socket.massive.com/stocks
+T.SPY,T.QQQ,T.NVDA
 ```
 
-The adapter sends the required authentication action and then one comma-separated
-subscription action containing explicit topics such as:
+The retained real-time subscription for the Advanced plan is:
 
 ```text
 T.SPY,T.QQQ,T.NVDA,Q.SPY,Q.QQQ,Q.NVDA
@@ -39,8 +47,12 @@ WebSocket endpoint:
 
 ```text
 MASSIVE_API_KEY
+MASSIVE_DATA_MODE
 MASSIVE_WS_URL
 ```
+
+`MASSIVE_DATA_MODE` accepts `delayed` or `realtime` and defaults to `delayed`.
+`MASSIVE_WS_URL` is optional; each mode otherwise selects its canonical endpoint.
 
 The key is used only for the outbound authentication message. It is excluded
 from status, representations, exceptions, logs, documentation, and output.
@@ -53,9 +65,10 @@ Massive `T` events become the existing immutable `LiveTrade` type. `sym`, `p`,
 `source_timestamp`; provider sequence `q`, participant timestamp `pt`, tape `z`,
 and conditions are retained as immutable metadata.
 
-Massive `Q` events become the existing immutable `LiveQuote` type. Bid/ask
-prices, sizes, and exchange IDs map directly. Provider sequence, tape,
-condition, and indicators remain immutable metadata.
+In real-time mode, Massive `Q` events become the existing immutable `LiveQuote`
+type. Bid/ask prices, sizes, and exchange IDs map directly. Provider sequence,
+tape, condition, and indicators remain immutable metadata. Developer delayed
+mode intentionally requests no quote topics and treats zero quotes as valid.
 
 Malformed symbols, prices, sizes, or timestamps are rejected before the live
 bus. Crossed quotes are rejected. Status and control messages update adapter
@@ -81,12 +94,22 @@ mean/maximum handler time, synchronous queue depth (`0`), dropped messages, and
 malformed messages. This bounded synchronous pilot must retain a dropped count
 of zero.
 
+## Delayed Trade Bar Contract
+
+Delayed Developer data is valid for ingestion, bar-pipeline, opening-range, and
+strategy engineering. Eligible trades still define open, high, low, close,
+volume, and trade count. With no quote entitlement, `latest_bid` and
+`latest_ask` remain `None`; the system neither fabricates quotes nor creates flat
+candles for intervals without trades. The completed-bar close remains a signal
+reference, but delayed data is classified `DELAYED_MARKET_DATA` and
+`NOT_ELIGIBLE_FOR_LIVE_EXECUTION_REFERENCE`.
+
 ## Commands
 
 ```powershell
 .venv\Scripts\python.exe -m scripts.run_massive_fixture_demo
-.venv\Scripts\python.exe -m scripts.run_massive_live_smoke
-.venv\Scripts\python.exe -m scripts.run_massive_live_smoke --symbols SPY,QQQ,NVDA --duration-seconds 180
+.venv\Scripts\python.exe -m scripts.run_massive_live_smoke --mode delayed
+.venv\Scripts\python.exe -m scripts.run_massive_live_smoke --mode realtime --symbols SPY,QQQ,NVDA --duration-seconds 180
 ```
 
 The fixture requires no key or network. Without `MASSIVE_API_KEY`, the live
@@ -94,7 +117,10 @@ command exits cleanly with `BLOCKED_BY_MISSING_CREDENTIAL`.
 
 ## Coverage Limitations
 
-This mission proves a bounded direct Massive stream contract only. It does not
+The Developer plan supports full-market delayed trades but no quotes. It is not
+suitable for real-time shadow operation or live execution-reference validation.
+Massive Stocks Advanced is required before selecting real-time mode and before
+Aegis may validate current bid/ask execution references. This mission does not
 prove all-market throughput, entitlement for every symbol, broad discovery,
 opening-strategy behavior, or execution. Accepted and rejected topics remain
 visible in immutable status so partial subscription coverage cannot be mistaken

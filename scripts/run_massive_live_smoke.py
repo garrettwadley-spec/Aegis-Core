@@ -12,6 +12,7 @@ from aegis.eventbus import EventBus
 from aegis.marketdata import (
     DEFAULT_MASSIVE_SYMBOLS,
     LiveMarketDataBus,
+    MassiveDataMode,
     MassiveStockStreamAdapter,
     OpeningRangeBuilder,
     ThirtySecondBarBuilder,
@@ -33,7 +34,23 @@ def _metric(value: float | None) -> str:
     return "N/A" if value is None else f"{value:.3f} ms"
 
 
-async def _run(symbols: tuple[str, ...], duration_seconds: float) -> None:
+async def _run(
+    symbols: tuple[str, ...],
+    duration_seconds: float,
+    mode: MassiveDataMode,
+) -> None:
+    print("MODE")
+    print(f"Mode: {mode.name}")
+    print(f"Endpoint: {mode.endpoint}")
+    print(
+        "Quote entitlement: "
+        + ("AVAILABLE" if mode.quote_entitlement else "NOT AVAILABLE")
+    )
+    print(
+        "Execution reference eligibility: "
+        + ("YES" if mode.execution_reference_eligible else "NO")
+    )
+    print()
     if not massive_credential_present():
         print("Configure MASSIVE_API_KEY locally; MASSIVE_WS_URL is optional.")
         print("MASSIVE LIVE SMOKE: BLOCKED_BY_MISSING_CREDENTIAL")
@@ -46,6 +63,7 @@ async def _run(symbols: tuple[str, ...], duration_seconds: float) -> None:
     observations = []
     adapter = MassiveStockStreamAdapter.from_environment(
         symbols=symbols,
+        mode=mode,
         observation_sink=lambda item: (
             observations.append(item),
             live_bus.ingest(item),
@@ -129,18 +147,55 @@ async def _run(symbols: tuple[str, ...], duration_seconds: float) -> None:
                 + (",".join(f"{symbol}={count}" for symbol, count in sorted(partial.items())) or "None")
             )
 
-    if (
-        status.authenticated
-        and status.subscribed
-        and observations
-        and capacity.dropped_messages == 0
-        and bar_builder.bars
-    ):
-        result = "PASS"
-    elif status.authenticated and status.subscribed:
-        result = "PARTIAL"
+    if mode == MassiveDataMode.DELAYED_TRADES:
+        accepted_trades = tuple(
+            topic
+            for topic in status.accepted_subscriptions
+            if topic.startswith("T.")
+        )
+        rejected_trades = tuple(
+            topic
+            for topic in status.rejected_subscriptions
+            if topic.startswith("T.")
+        )
+        if (
+            status.authenticated
+            and status.subscribed
+            and accepted_trades
+            and not rejected_trades
+            and status.trades_received > 0
+            and capacity.dropped_messages == 0
+            and capacity.malformed_messages == 0
+            and bar_builder.bars
+        ):
+            result = "PASS"
+        elif (
+            status.authenticated
+            and status.subscribed
+            and accepted_trades
+            and not rejected_trades
+            and status.trades_received == 0
+            and capacity.dropped_messages == 0
+            and capacity.malformed_messages == 0
+        ):
+            result = "AUTHENTICATED_AND_SUBSCRIBED_NO_TRADES_DURING_WINDOW"
+        elif status.authenticated and status.subscribed:
+            result = "PARTIAL"
+        else:
+            result = "FAILED"
     else:
-        result = "FAILED"
+        if (
+            status.authenticated
+            and status.subscribed
+            and observations
+            and capacity.dropped_messages == 0
+            and bar_builder.bars
+        ):
+            result = "PASS"
+        elif status.authenticated and status.subscribed:
+            result = "PARTIAL"
+        else:
+            result = "FAILED"
     print()
     print(f"MASSIVE LIVE SMOKE: {result}")
 
@@ -154,8 +209,19 @@ def main() -> None:
         help="Comma-separated symbols, maximum 20",
     )
     parser.add_argument("--duration-seconds", type=float, default=180.0)
+    parser.add_argument(
+        "--mode",
+        choices=("delayed", "realtime"),
+        default="delayed",
+    )
     args = parser.parse_args()
-    asyncio.run(_run(args.symbols, args.duration_seconds))
+    asyncio.run(
+        _run(
+            args.symbols,
+            args.duration_seconds,
+            MassiveDataMode.parse(args.mode),
+        )
+    )
 
 
 if __name__ == "__main__":

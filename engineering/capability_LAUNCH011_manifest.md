@@ -7,6 +7,11 @@ normalize provider trades and NBBO quotes into the existing provider-neutral
 live objects, meter arrival/capacity behavior, and route observations through
 the existing 30-second bar and five-minute opening-range engine.
 
+LAUNCH-011D adds two explicit contracts. `DELAYED_TRADES` is the default for the
+current Massive Stocks Developer plan and uses delayed `T.SYMBOL` topics only.
+`REALTIME_TRADES_QUOTES` preserves the existing Advanced-plan `T.SYMBOL` and
+`Q.SYMBOL` contract unchanged.
+
 ## Reused Authorities
 
 - F001 EventBus remains the only event sequence and dispatch path.
@@ -29,6 +34,10 @@ Dropped and malformed counts were zero.
 
 Fixture latency values are deterministic pipeline evidence only. They are not
 claims about Massive or internet performance.
+
+Focused delayed-mode evidence additionally proves that existing 30-second bars
+build from trades alone, leave latest bid/ask unavailable, and do not fabricate
+quotes or no-trade candles.
 
 ## Self Review
 
@@ -61,15 +70,29 @@ calculation and must not be interpreted as real provider latency.
 
 ### 6. What Are The Coverage And Subscription Limits?
 
-Only explicit `T.SYMBOL` and `Q.SYMBOL` topics are supported, with 1-20 symbols.
-Wildcards and all-market throughput are prohibited. Actual entitlements,
-accepted topics, and genuine message capacity remain externally unproven.
+Only explicit topics are supported, with 1-20 symbols. Developer delayed mode
+requests `T.SYMBOL` only and is classified `FULL_MARKET_DELAYED_TRADES` and
+`DELAYED_MARKET_DATA`. Advanced real-time mode requests both `T.SYMBOL` and
+`Q.SYMBOL` and is classified `REALTIME_TRADES_AND_NBBO_QUOTES`. Wildcards and
+all-market throughput are prohibited. Actual accepted topics and genuine
+message capacity remain externally unproven.
 
 ### 7. What Is The Exact Next Step?
 
-Configure `MASSIVE_API_KEY` in the local environment and run the bounded default
-live smoke. Only after genuine trades, quotes, zero drops, and completed bars are
-observed should Aegis build Opening Strategy v2 in live shadow mode.
+Configure `MASSIVE_API_KEY` locally and run the bounded delayed smoke. Delayed
+trades and completed bars can support pipeline and strategy engineering, but not
+live execution references. Before real-time shadow operation, upgrade to Massive
+Stocks Advanced, set `MASSIVE_DATA_MODE=realtime`, and prove authentication,
+trade and quote subscriptions, genuine trades and NBBO quotes, zero drops, zero
+malformed messages, and completed 30-second bars.
+
+## Developer And Advanced Gate
+
+- Developer: 15-minute-delayed trades over WebSocket, no quote entitlement.
+- Delayed evidence: valid for pipeline and strategy engineering.
+- Delayed execution eligibility: `NOT_ELIGIBLE_FOR_LIVE_EXECUTION_REFERENCE`.
+- Advanced required: real-time trades, NBBO quotes, real-time shadow decisions,
+  and any live execution-reference validation.
 
 ## Excluded Work
 

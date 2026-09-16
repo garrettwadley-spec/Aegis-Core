@@ -5,6 +5,7 @@ import asyncio
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+from enum import Enum
 import json
 from math import ceil, isfinite
 import os
@@ -18,8 +19,11 @@ from .live_models import LiveQuote, LiveTrade
 
 
 MASSIVE_API_KEY = "MASSIVE_API_KEY"
+MASSIVE_DATA_MODE = "MASSIVE_DATA_MODE"
 MASSIVE_WS_URL = "MASSIVE_WS_URL"
-DEFAULT_MASSIVE_WS_URL = "wss://socket.massive.com/stocks"
+MASSIVE_DELAYED_WS_URL = "wss://delayed.massive.com/stocks"
+MASSIVE_REALTIME_WS_URL = "wss://socket.massive.com/stocks"
+DEFAULT_MASSIVE_WS_URL = MASSIVE_DELAYED_WS_URL
 DEFAULT_MASSIVE_SYMBOLS = ("SPY", "QQQ", "NVDA", "AAPL", "TSLA")
 MAX_MASSIVE_SYMBOLS = 20
 
@@ -28,8 +32,56 @@ class MissingMassiveCredentialError(RuntimeError):
     pass
 
 
+class MassiveDataMode(str, Enum):
+    DELAYED_TRADES = "delayed"
+    REALTIME_TRADES_QUOTES = "realtime"
+
+    @classmethod
+    def parse(cls, value: "MassiveDataMode | str") -> "MassiveDataMode":
+        if isinstance(value, cls):
+            return value
+        normalized = str(value).strip().lower()
+        try:
+            return cls(normalized)
+        except ValueError as exc:
+            raise ValueError("MASSIVE_DATA_MODE must be delayed or realtime") from exc
+
+    @property
+    def endpoint(self) -> str:
+        if self == MassiveDataMode.DELAYED_TRADES:
+            return MASSIVE_DELAYED_WS_URL
+        return MASSIVE_REALTIME_WS_URL
+
+    @property
+    def coverage_classification(self) -> str:
+        if self == MassiveDataMode.DELAYED_TRADES:
+            return "FULL_MARKET_DELAYED_TRADES"
+        return "REALTIME_TRADES_AND_NBBO_QUOTES"
+
+    @property
+    def evidence_classification(self) -> str:
+        if self == MassiveDataMode.DELAYED_TRADES:
+            return "DELAYED_MARKET_DATA"
+        return "REALTIME_MARKET_DATA"
+
+    @property
+    def quote_entitlement(self) -> bool:
+        return self == MassiveDataMode.REALTIME_TRADES_QUOTES
+
+    @property
+    def execution_reference_eligible(self) -> bool:
+        return self == MassiveDataMode.REALTIME_TRADES_QUOTES
+
+    @property
+    def execution_reference_classification(self) -> str:
+        if self == MassiveDataMode.DELAYED_TRADES:
+            return "NOT_ELIGIBLE_FOR_LIVE_EXECUTION_REFERENCE"
+        return "REALTIME_NBBO_EXECUTION_REFERENCE"
+
+
 @dataclass(frozen=True)
 class MassiveStreamStatus:
+    mode: MassiveDataMode
     connected: bool
     authenticated: bool
     subscribed: bool
@@ -45,6 +97,11 @@ class MassiveStreamStatus:
     reconnect_count: int
     dropped_messages: int
     endpoint: str
+    coverage_classification: str
+    evidence_classification: str
+    quote_entitlement: bool
+    execution_reference_eligible: bool
+    execution_reference_classification: str
     last_error: str | None = None
 
 
@@ -173,7 +230,8 @@ class MassiveStockStreamAdapter:
         symbols: tuple[str, ...],
         observation_sink: Callable[[LiveTrade | LiveQuote], object],
         api_key: str,
-        endpoint: str = DEFAULT_MASSIVE_WS_URL,
+        mode: MassiveDataMode | str = MassiveDataMode.DELAYED_TRADES,
+        endpoint: str | None = None,
         max_attempts: int = 2,
         reconnect_delay_seconds: float = 1.0,
         connect_factory: Callable[..., Any] = connect,
@@ -189,21 +247,23 @@ class MassiveStockStreamAdapter:
             )
         if any("*" in symbol for symbol in requested):
             raise ValueError("wildcard Massive subscriptions are prohibited")
-        if not endpoint.strip().lower().startswith("wss://"):
+        selected_mode = MassiveDataMode.parse(mode)
+        selected_endpoint = selected_mode.endpoint if endpoint is None else endpoint.strip()
+        if not selected_endpoint.lower().startswith("wss://"):
             raise ValueError("Massive endpoint must use wss://")
         if max_attempts <= 0 or max_attempts > 3:
             raise ValueError("max_attempts must be between one and three")
         if reconnect_delay_seconds < 0 or reconnect_delay_seconds > 5:
             raise ValueError("reconnect delay must be between zero and five seconds")
-        topics = tuple(
-            [f"T.{symbol}" for symbol in requested]
-            + [f"Q.{symbol}" for symbol in requested]
-        )
+        topics = [f"T.{symbol}" for symbol in requested]
+        if selected_mode == MassiveDataMode.REALTIME_TRADES_QUOTES:
+            topics.extend(f"Q.{symbol}" for symbol in requested)
         self._symbols = requested
-        self._topics = topics
+        self._topics = tuple(topics)
+        self._mode = selected_mode
         self._observation_sink = observation_sink
         self._api_key = api_key
-        self._endpoint = endpoint.strip()
+        self._endpoint = selected_endpoint
         self._max_attempts = max_attempts
         self._reconnect_delay_seconds = reconnect_delay_seconds
         self._connect_factory = connect_factory
@@ -212,11 +272,12 @@ class MassiveStockStreamAdapter:
         self._message_buckets: dict[str, int] = {}
         self._handler_times_ms: list[float] = []
         self._status = MassiveStreamStatus(
+            mode=selected_mode,
             connected=False,
             authenticated=False,
             subscribed=False,
             requested_symbols=requested,
-            requested_subscriptions=topics,
+            requested_subscriptions=self._topics,
             accepted_subscriptions=(),
             rejected_subscriptions=(),
             messages_received=0,
@@ -227,6 +288,15 @@ class MassiveStockStreamAdapter:
             reconnect_count=0,
             dropped_messages=0,
             endpoint=self._endpoint,
+            coverage_classification=selected_mode.coverage_classification,
+            evidence_classification=selected_mode.evidence_classification,
+            quote_entitlement=selected_mode.quote_entitlement,
+            execution_reference_eligible=(
+                selected_mode.execution_reference_eligible
+            ),
+            execution_reference_classification=(
+                selected_mode.execution_reference_classification
+            ),
         )
 
     @classmethod
@@ -236,6 +306,7 @@ class MassiveStockStreamAdapter:
         symbols: tuple[str, ...],
         observation_sink: Callable[[LiveTrade | LiveQuote], object],
         environment: Mapping[str, str] | None = None,
+        mode: MassiveDataMode | str | None = None,
         max_attempts: int = 2,
         reconnect_delay_seconds: float = 1.0,
         connect_factory: Callable[..., Any] = connect,
@@ -243,12 +314,17 @@ class MassiveStockStreamAdapter:
         source = os.environ if environment is None else environment
         if not massive_credential_present(source):
             raise MissingMassiveCredentialError("MASSIVE_API_KEY is required")
+        selected_mode = MassiveDataMode.parse(
+            source.get(MASSIVE_DATA_MODE, MassiveDataMode.DELAYED_TRADES.value)
+            if mode is None
+            else mode
+        )
         return cls(
             symbols=symbols,
             observation_sink=observation_sink,
             api_key=source[MASSIVE_API_KEY],
-            endpoint=source.get(MASSIVE_WS_URL, DEFAULT_MASSIVE_WS_URL)
-            or DEFAULT_MASSIVE_WS_URL,
+            mode=selected_mode,
+            endpoint=source.get(MASSIVE_WS_URL) or selected_mode.endpoint,
             max_attempts=max_attempts,
             reconnect_delay_seconds=reconnect_delay_seconds,
             connect_factory=connect_factory,
@@ -256,7 +332,8 @@ class MassiveStockStreamAdapter:
 
     def __repr__(self) -> str:
         return (
-            f"MassiveStockStreamAdapter(symbols={self._symbols!r}, "
+            f"MassiveStockStreamAdapter(mode={self._mode.name}, "
+            f"symbols={self._symbols!r}, "
             f"status={self._status!r})"
         )
 
