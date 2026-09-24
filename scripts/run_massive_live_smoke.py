@@ -5,6 +5,8 @@ import argparse
 import asyncio
 from collections import Counter
 from datetime import time
+from math import isfinite
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from aegis.clock import system_clock
@@ -13,6 +15,7 @@ from aegis.marketdata import (
     DEFAULT_MASSIVE_SYMBOLS,
     LiveMarketDataBus,
     MassiveDataMode,
+    MassiveMessageClassification,
     MassiveStockStreamAdapter,
     OpeningRangeBuilder,
     ThirtySecondBarBuilder,
@@ -21,6 +24,7 @@ from aegis.marketdata import (
 
 
 NEW_YORK = ZoneInfo("America/New_York")
+DEFAULT_DIAGNOSTIC_PATH = Path("runs/massive_diagnostics/latest.json")
 
 
 def _symbols(value: str) -> tuple[str, ...]:
@@ -34,10 +38,20 @@ def _metric(value: float | None) -> str:
     return "N/A" if value is None else f"{value:.3f} ms"
 
 
+def _bounded_duration(value: str) -> float:
+    duration = float(value)
+    if not isfinite(duration) or duration <= 0 or duration > 300:
+        raise argparse.ArgumentTypeError(
+            "--duration-seconds must be greater than zero and no more than 300"
+        )
+    return duration
+
+
 async def _run(
     symbols: tuple[str, ...],
     duration_seconds: float,
     mode: MassiveDataMode,
+    diagnostic_path: Path,
 ) -> None:
     print("MODE")
     print(f"Mode: {mode.name}")
@@ -70,10 +84,12 @@ async def _run(
         ),
     )
     await adapter.run(max_seconds=duration_seconds)
+    artifact_path = adapter.write_diagnostic_report(diagnostic_path)
 
     status = adapter.status
     latency = adapter.latency_statistics
     capacity = adapter.capacity_statistics
+    diagnostics = adapter.message_diagnostics
     observed_symbols = tuple(sorted({item.symbol for item in observations}))
     bars_by_symbol = Counter(bar.symbol for bar in bar_builder.bars)
     latest_bar = bar_builder.bars[-1] if bar_builder.bars else None
@@ -104,6 +120,38 @@ async def _run(
     print(f"Handler maximum: {_metric(capacity.maximum_handler_processing_ms)}")
     print(f"Queue depth: {capacity.queue_depth}")
     print(f"Dropped: {capacity.dropped_messages}")
+    print()
+    print("MESSAGE CLASSIFICATION")
+    for classification in MassiveMessageClassification:
+        print(f"{classification.value}: {diagnostics.count(classification)}")
+    print(f"Total classified: {diagnostics.total_classified}")
+    print(f"Messages received: {diagnostics.messages_received}")
+    print(f"Counts reconcile: {diagnostics.counts_reconcile}")
+    print(f"Malformed classified: {diagnostics.malformed_classified}")
+    print(
+        "Malformed counts reconcile: "
+        f"{diagnostics.malformed_counts_reconcile}"
+    )
+    print(f"Delivery failures: {diagnostics.delivery_failures}")
+    print(f"Diagnostic artifact: {artifact_path}")
+    potentially_bar_affecting = sum(
+        diagnostics.count(classification)
+        for classification in (
+            MassiveMessageClassification.UNKNOWN_EVENT_TYPE,
+            MassiveMessageClassification.INVALID_JSON_OR_PAYLOAD_STRUCTURE,
+            MassiveMessageClassification.MISSING_OR_INVALID_SYMBOL,
+            MassiveMessageClassification.MISSING_OR_INVALID_TIMESTAMP,
+            MassiveMessageClassification.MISSING_OR_INVALID_PRICE,
+            MassiveMessageClassification.MISSING_OR_INVALID_SIZE,
+            MassiveMessageClassification.OTHER_DOMAIN_VALIDATION_FAILURE,
+        )
+    )
+    bar_completeness = (
+        "UNCONFIRMED"
+        if potentially_bar_affecting or diagnostics.delivery_failures
+        else "NO_REJECTED_TRADE_IMPACT_OBSERVED"
+    )
+    print(f"Strategy bar completeness: {bar_completeness}")
     print()
     print("THIRTY-SECOND BARS")
     print(f"Bars completed: {len(bar_builder.bars)}")
@@ -208,11 +256,16 @@ def main() -> None:
         default=DEFAULT_MASSIVE_SYMBOLS,
         help="Comma-separated symbols, maximum 20",
     )
-    parser.add_argument("--duration-seconds", type=float, default=180.0)
+    parser.add_argument("--duration-seconds", type=_bounded_duration, default=180.0)
     parser.add_argument(
         "--mode",
         choices=("delayed", "realtime"),
         default="delayed",
+    )
+    parser.add_argument(
+        "--diagnostic-path",
+        type=Path,
+        default=DEFAULT_DIAGNOSTIC_PATH,
     )
     args = parser.parse_args()
     asyncio.run(
@@ -220,6 +273,7 @@ def main() -> None:
             args.symbols,
             args.duration_seconds,
             MassiveDataMode.parse(args.mode),
+            args.diagnostic_path,
         )
     )
 

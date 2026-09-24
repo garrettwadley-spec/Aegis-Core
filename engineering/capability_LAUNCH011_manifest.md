@@ -12,6 +12,11 @@ current Massive Stocks Developer plan and uses delayed `T.SYMBOL` topics only.
 `REALTIME_TRADES_QUOTES` preserves the existing Advanced-plan `T.SYMBOL` and
 `Q.SYMBOL` contract unchanged.
 
+LAUNCH-011E makes stream rejection accounting explainable. Every event receives
+one primary classification, primary counts reconcile exactly to messages
+received, delivery failures remain separate, and at most five sanitized samples
+per rejection reason can be written under the Git-ignored `runs/` tree.
+
 ## Reused Authorities
 
 - F001 EventBus remains the only event sequence and dispatch path.
@@ -39,27 +44,45 @@ Focused delayed-mode evidence additionally proves that existing 30-second bars
 build from trades alone, leave latest bid/ask unavailable, and do not fabricate
 quotes or no-trade candles.
 
+Focused diagnostic evidence proves deterministic classification, exact count
+reconciliation, bounded samples, safe-field allowlisting, and separate delivery
+failure accounting. These are offline instrumentation results, not evidence of
+an external Massive feed.
+
+## LAUNCH-011E External Evidence Status
+
+An operator-run delayed-feed test reported 6,242 messages through the former
+undifferentiated malformed counter. No rejected payload samples or category
+counts were retained. The API key was absent during LAUNCH-011E implementation,
+so the external diagnostic was not rerun and no parser correction was made.
+
+Root cause is `UNCONFIRMED`. It is also `UNCONFIRMED` whether rejected messages
+contained valid trades and whether their exclusion changed bar OHLC or volume.
+The bounded diagnostic report is now required to answer both questions.
+
 ## Self Review
 
-### 1. Was Real External Connectivity Proven?
+### 1. Was The LAUNCH-011E External Diagnostic Run?
 
-No. `MASSIVE_API_KEY` was absent, so the bounded live smoke exited with
-`BLOCKED_BY_MISSING_CREDENTIAL` without attempting a connection.
+No. `MASSIVE_API_KEY` was absent in the running process. Earlier operator output
+cannot substitute for the new category counts and sanitized samples.
 
 ### 2. Were Real Trades Received?
 
-No. Twenty-four deterministic Massive-shaped fixture trades were received and
-normalized; no genuine external trade was observed.
+Not during LAUNCH-011E. The earlier operator run reported genuine delayed-feed
+activity, but its raw category evidence was not retained. The only evidence
+reproduced in this mission was 24 deterministic fixture trades.
 
 ### 3. Were Real Quotes Received?
 
-No. Twelve deterministic Massive-shaped NBBO quote fixtures were received and
-normalized; no genuine external quote was observed.
+No, as expected for Developer delayed mode. Twelve deterministic NBBO quote
+fixtures continue to cover the retained Advanced-plan parser offline.
 
 ### 4. Were Completed 30-Second Bars Produced?
 
-Yes offline: twelve completed existing bars were produced. Live external bar
-production remains unproven until a credentialed bounded smoke succeeds.
+Yes offline: twelve completed existing bars were produced. The operator reported
+external bars, but whether the 6,242 exclusions changed their OHLC or volume is
+unconfirmed until the credentialed diagnostic captures rejection categories.
 
 ### 5. What Latency Was Observed?
 
@@ -74,14 +97,22 @@ Only explicit topics are supported, with 1-20 symbols. Developer delayed mode
 requests `T.SYMBOL` only and is classified `FULL_MARKET_DELAYED_TRADES` and
 `DELAYED_MARKET_DATA`. Advanced real-time mode requests both `T.SYMBOL` and
 `Q.SYMBOL` and is classified `REALTIME_TRADES_AND_NBBO_QUOTES`. Wildcards and
-all-market throughput are prohibited. Actual accepted topics and genuine
-message capacity remain externally unproven.
+all-market throughput are prohibited. Accepted-topic and capacity evidence from
+the earlier external run was not retained in a diagnostic artifact.
 
 ### 7. What Is The Exact Next Step?
 
-Configure `MASSIVE_API_KEY` locally and run the bounded delayed smoke. Delayed
-trades and completed bars can support pipeline and strategy engineering, but not
-live execution references. Before real-time shadow operation, upgrade to Massive
+Configure `MASSIVE_API_KEY` locally and run the 300-second delayed diagnostic:
+
+```powershell
+Set-Location 'C:\Users\garre\Aegis-worktrees\launch-011-massive-live-stream'
+& 'C:\Users\garre\Aegis-worktrees\foundation-integration-v1\runs\python-3.11.9-embed\python.exe' -m scripts.run_massive_live_smoke --mode delayed --duration-seconds 300 --diagnostic-path runs/massive_diagnostics/launch-011e.json
+```
+
+Review category counts and sanitized samples before changing the parser or
+declaring strategy bars complete. Delayed trades and completed bars can support
+pipeline and strategy engineering, but not live execution references. Before
+real-time shadow operation, upgrade to Massive
 Stocks Advanced, set `MASSIVE_DATA_MODE=realtime`, and prove authentication,
 trade and quote subscriptions, genuine trades and NBBO quotes, zero drops, zero
 malformed messages, and completed 30-second bars.

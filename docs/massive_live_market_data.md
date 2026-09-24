@@ -37,7 +37,7 @@ T.SPY,T.QQQ,T.NVDA,Q.SPY,Q.QQQ,Q.NVDA
 
 `T.*` and `Q.*` are rejected. The watchlist must contain 1-20 explicit symbols.
 Connection attempts are limited to three, reconnect delay is capped at five
-seconds, and a smoke run is capped at ten minutes. The default smoke uses SPY,
+seconds, and an external diagnostic run is capped at five minutes. The default smoke uses SPY,
 QQQ, NVDA, AAPL, and TSLA for 180 seconds.
 
 ## Credentials
@@ -75,6 +75,12 @@ bus. Crossed quotes are rejected. Status and control messages update adapter
 status only and never reach bar or strategy logic. Aegis `system_clock` supplies
 `received_at`, `created_at`, message buckets, and handler timing.
 
+The official [Massive trade schema](https://www.massive.com/docs/websocket/stocks/trades)
+documents integer size `s` and fractional-share size `ds`. Aegis continues to
+use `s` until a sanitized external rejection proves that a different mapping is
+required. Diagnostics retain both fields when present, which permits a targeted
+correction without guessing or weakening validation.
+
 ## Observability
 
 For every accepted trade or quote, the adapter calculates:
@@ -94,6 +100,40 @@ mean/maximum handler time, synchronous queue depth (`0`), dropped messages, and
 malformed messages. This bounded synchronous pilot must retain a dropped count
 of zero.
 
+### Message Classification Diagnostics
+
+Every decoded message receives exactly one primary classification:
+
+- accepted trade or quote
+- recognized control message
+- intentionally ignored documented non-`T`/`Q` event
+- unknown event type
+- invalid JSON or payload structure
+- missing or invalid symbol, timestamp, price, or size
+- other domain-validation failure
+
+Delivery failures are counted separately because a valid normalized observation
+can be accepted by the parser but fail to reach the live bus. Primary counts
+must sum exactly to `messages_received`.
+
+The smoke writes a bounded JSON report to
+`runs/massive_diagnostics/latest.json`. The `runs/` tree is Git-ignored. The
+report retains no more than five examples per reason and only whitelists safe
+market-data fields. Authentication actions, keys, headers, and raw invalid JSON
+are never retained.
+
+Documented `A`, `AM`, `LULD`, `NOI`, and `FMV` events are intentionally ignored
+because the current bars are built from accepted `T` events. Their exclusion
+does not directly change trade-derived OHLC or volume. Rejected `T` events can
+affect both; unknown or structurally invalid payload impact remains unconfirmed
+until its sanitized sample is reviewed.
+
+An earlier operator-run delayed smoke reported 6,242 messages under the legacy
+aggregate `malformed_messages` counter. That version retained no category counts
+or samples, so the root cause and bar completeness are `UNCONFIRMED`. The new
+report is the required evidence before any parser correction or strategy-bar
+completeness claim.
+
 ## Delayed Trade Bar Contract
 
 Delayed Developer data is valid for ingestion, bar-pipeline, opening-range, and
@@ -109,6 +149,7 @@ reference, but delayed data is classified `DELAYED_MARKET_DATA` and
 ```powershell
 .venv\Scripts\python.exe -m scripts.run_massive_fixture_demo
 .venv\Scripts\python.exe -m scripts.run_massive_live_smoke --mode delayed
+.venv\Scripts\python.exe -m scripts.run_massive_live_smoke --mode delayed --duration-seconds 300 --diagnostic-path runs/massive_diagnostics/launch-011e.json
 .venv\Scripts\python.exe -m scripts.run_massive_live_smoke --mode realtime --symbols SPY,QQQ,NVDA --duration-seconds 180
 ```
 

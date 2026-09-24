@@ -1,10 +1,13 @@
 """Focused LAUNCH-011 Massive stream tests."""
 from __future__ import annotations
 
+from argparse import ArgumentTypeError
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta, timezone
 from io import StringIO
 import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
@@ -18,6 +21,7 @@ from aegis.marketdata import (
     LiveQuote,
     LiveTrade,
     MassiveDataMode,
+    MassiveMessageClassification,
     MassiveStockStreamAdapter,
     OpeningRangeBuilder,
     ThirtySecondBar,
@@ -27,6 +31,7 @@ from aegis.marketdata import (
     parse_massive_sip_timestamp,
 )
 from scripts.run_massive_fixture_demo import main as fixture_main
+from scripts.run_massive_live_smoke import _bounded_duration
 
 
 UTC = timezone.utc
@@ -309,6 +314,14 @@ class TestMassivePipelineAndMetrics(MassiveTestCase):
         with self.assertRaises(RuntimeError):
             adapter.handle_message(trade_message())
         self.assertEqual(adapter.status.dropped_messages, 1)
+        diagnostics = adapter.message_diagnostics
+        self.assertEqual(
+            diagnostics.count(MassiveMessageClassification.ACCEPTED_TRADE),
+            1,
+        )
+        self.assertEqual(diagnostics.delivery_failures, 1)
+        self.assertEqual(diagnostics.total_classified, 1)
+        self.assertTrue(diagnostics.counts_reconcile)
 
     def test_invalid_raw_payload_is_counted_as_received_and_malformed(self):
         adapter = self.adapter()
@@ -316,6 +329,12 @@ class TestMassivePipelineAndMetrics(MassiveTestCase):
         self.assertEqual(adapter.status.messages_received, 1)
         self.assertEqual(adapter.status.malformed_messages, 1)
         self.assertEqual(adapter.capacity_statistics.handler_count, 1)
+        self.assertEqual(
+            adapter.message_diagnostics.count(
+                MassiveMessageClassification.INVALID_JSON_OR_PAYLOAD_STRUCTURE
+            ),
+            1,
+        )
 
     def test_offline_fixture_demo_succeeds(self):
         output = StringIO()
@@ -328,6 +347,101 @@ class TestMassivePipelineAndMetrics(MassiveTestCase):
         self.assertIn("Complete: True", rendered)
         self.assertIn("Provider-neutral path: True", rendered)
         self.assertIn("Dropped: 0", rendered)
+
+
+class TestMassiveMessageDiagnostics(MassiveTestCase):
+    def test_external_diagnostic_duration_is_bounded_to_five_minutes(self):
+        self.assertEqual(_bounded_duration("300"), 300.0)
+        for value in ("0", "301", "nan"):
+            with self.subTest(value=value):
+                with self.assertRaises(ArgumentTypeError):
+                    _bounded_duration(value)
+
+    def test_each_message_has_exactly_one_primary_classification(self):
+        adapter = self.adapter()
+        adapter.handle_message(
+            {"ev": "status", "status": "auth_success", "message": "authenticated"}
+        )
+        adapter.handle_message(trade_message())
+        adapter.handle_message(quote_message())
+        adapter.handle_message({"ev": "A", "sym": "SPY", "s": 1, "e": 2})
+        adapter.handle_message({"ev": "NEW", "sym": "SPY"})
+        adapter.handle_payload("not-json")
+        adapter.handle_payload(json.dumps([42]))
+        adapter.handle_message(trade_message(sym=""))
+        adapter.handle_message(trade_message(t="bad"))
+        adapter.handle_message(trade_message(p="bad"))
+        adapter.handle_message(trade_message(s=0, ds="0.5"))
+        adapter.handle_message(trade_message(c=7))
+
+        diagnostics = adapter.message_diagnostics
+        expected = {
+            MassiveMessageClassification.ACCEPTED_TRADE: 1,
+            MassiveMessageClassification.ACCEPTED_QUOTE: 1,
+            MassiveMessageClassification.RECOGNIZED_CONTROL: 1,
+            MassiveMessageClassification.INTENTIONALLY_IGNORED_DOCUMENTED: 1,
+            MassiveMessageClassification.UNKNOWN_EVENT_TYPE: 1,
+            MassiveMessageClassification.INVALID_JSON_OR_PAYLOAD_STRUCTURE: 2,
+            MassiveMessageClassification.MISSING_OR_INVALID_SYMBOL: 1,
+            MassiveMessageClassification.MISSING_OR_INVALID_TIMESTAMP: 1,
+            MassiveMessageClassification.MISSING_OR_INVALID_PRICE: 1,
+            MassiveMessageClassification.MISSING_OR_INVALID_SIZE: 1,
+            MassiveMessageClassification.OTHER_DOMAIN_VALIDATION_FAILURE: 1,
+        }
+        for classification, count in expected.items():
+            with self.subTest(classification=classification):
+                self.assertEqual(diagnostics.count(classification), count)
+        self.assertEqual(diagnostics.messages_received, 12)
+        self.assertEqual(diagnostics.total_classified, 12)
+        self.assertTrue(diagnostics.counts_reconcile)
+        self.assertEqual(adapter.status.malformed_messages, 8)
+        self.assertEqual(diagnostics.malformed_classified, 8)
+        self.assertTrue(diagnostics.malformed_counts_reconcile)
+
+    def test_samples_are_bounded_sanitized_and_written_to_ignored_area(self):
+        adapter = self.adapter()
+        for index in range(7):
+            message = trade_message(s=0, ds="0.5", i=f"F{index}")
+            message["api_key"] = "SECRET_SHOULD_NOT_APPEAR"
+            message["headers"] = {"authorization": "SECRET_SHOULD_NOT_APPEAR"}
+            adapter.handle_message(message)
+
+        with TemporaryDirectory() as directory:
+            target = adapter.write_diagnostic_report(
+                Path(directory) / "massive-diagnostic.json"
+            )
+            report = json.loads(target.read_text(encoding="utf-8"))
+
+        samples = report["samples_by_reason"]["size_invalid"]
+        self.assertEqual(len(samples), 5)
+        self.assertEqual(samples[0]["event_type"], "T")
+        self.assertEqual(samples[0]["offending_field"], "s")
+        self.assertEqual(samples[0]["offending_value"], 0)
+        self.assertEqual(samples[0]["safe_market_data_fields"]["ds"], "0.5")
+        self.assertEqual(samples[0]["bar_ohlc_impact"], "POSSIBLE")
+        self.assertEqual(samples[0]["bar_volume_impact"], "POSSIBLE")
+        self.assertNotIn("SECRET_SHOULD_NOT_APPEAR", json.dumps(report))
+        self.assertTrue(report["counts_reconcile"])
+        self.assertTrue(report["malformed_counts_reconcile"])
+        self.assertEqual(report["messages_received"], 7)
+        self.assertEqual(report["total_classified"], 7)
+
+    def test_documented_ignored_event_does_not_inflate_malformed_count(self):
+        adapter = self.adapter()
+        adapter.handle_message({"ev": "AM", "sym": "SPY", "s": 1, "e": 2})
+        diagnostics = adapter.message_diagnostics
+        self.assertEqual(
+            diagnostics.count(
+                MassiveMessageClassification.INTENTIONALLY_IGNORED_DOCUMENTED
+            ),
+            1,
+        )
+        self.assertEqual(adapter.status.malformed_messages, 0)
+        report = adapter.diagnostic_report()
+        impact = report["exclusion_impact_definitions"][
+            "intentionally_ignored_documented"
+        ]
+        self.assertEqual((impact["bar_ohlc"], impact["bar_volume"]), ("NO", "NO"))
 
 
 class TestMassiveDelayedMode(MassiveTestCase):
