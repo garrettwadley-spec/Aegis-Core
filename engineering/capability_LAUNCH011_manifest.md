@@ -49,12 +49,25 @@ reconciliation, bounded samples, safe-field allowlisting, and separate delivery
 failure accounting. These are offline instrumentation results, not evidence of
 an external Massive feed.
 
+Focused historical-diagnostic evidence proves the documented REST-to-WebSocket
+field mapping, exact fixed sample window, pagination and record caps, truncation
+reporting, unchanged raw-record retention, credential exclusion, and reuse of
+the existing stream classifier. This is offline test evidence only until a
+credentialed historical request is run.
+
 ## LAUNCH-011E External Evidence Status
 
 An operator-run delayed-feed test reported 6,242 messages through the former
 undifferentiated malformed counter. No rejected payload samples or category
-counts were retained. The API key was absent during LAUNCH-011E implementation,
-so the external diagnostic was not rerun and no parser correction was made.
+counts were retained. A subsequent classified delayed-feed run authenticated
+and subscribed successfully, but received only seven recognized control
+messages: zero trades, zero malformed messages, and zero delivery failures. Its
+primary counts reconciled exactly. That quiet-window result does not explain the
+earlier 6,242 messages.
+
+`MASSIVE_API_KEY` was absent from the current Codex process, so the fixed
+historical REST diagnostic was not run against Massive and no parser correction
+was made.
 
 Root cause is `UNCONFIRMED`. It is also `UNCONFIRMED` whether rejected messages
 contained valid trades and whether their exclusion changed bar OHLC or volume.
@@ -64,14 +77,17 @@ The bounded diagnostic report is now required to answer both questions.
 
 ### 1. Was The LAUNCH-011E External Diagnostic Run?
 
-No. `MASSIVE_API_KEY` was absent in the running process. Earlier operator output
-cannot substitute for the new category counts and sanitized samples.
+Yes, the classified WebSocket diagnostic was run by the operator. It recorded
+seven recognized control messages and no trade payloads, so it supplied no
+rejection sample capable of explaining the legacy count. The historical REST
+diagnostic remains blocked by the absent key in the current Codex process.
 
 ### 2. Were Real Trades Received?
 
-Not during LAUNCH-011E. The earlier operator run reported genuine delayed-feed
-activity, but its raw category evidence was not retained. The only evidence
-reproduced in this mission was 24 deterministic fixture trades.
+Not in the latest classified WebSocket diagnostic. The earlier 6,242-message
+run retained no category or payload evidence sufficient to identify valid
+trades. The only accepted trades reproduced in the current work remain
+deterministic fixture trades.
 
 ### 3. Were Real Quotes Received?
 
@@ -102,15 +118,44 @@ the earlier external run was not retained in a diagnostic artifact.
 
 ### 7. What Is The Exact Next Step?
 
-Configure `MASSIVE_API_KEY` locally and run the 300-second delayed diagnostic:
+Configure `MASSIVE_API_KEY` locally and run the fixed historical REST diagnostic
+with the masked-key PowerShell flow. The script queries SPY, NVDA, and AAPL for
+September 25, 2026, 14:00-14:02 America/New_York, with a maximum of 10,000
+records per symbol:
 
 ```powershell
-Set-Location 'C:\Users\garre\Aegis-worktrees\launch-011-massive-live-stream'
-& 'C:\Users\garre\Aegis-worktrees\foundation-integration-v1\runs\python-3.11.9-embed\python.exe' -m scripts.run_massive_live_smoke --mode delayed --duration-seconds 300 --diagnostic-path runs/massive_diagnostics/launch-011e.json
+& {
+    $workspace = 'C:\Users\garre\Aegis-worktrees\launch-011-massive-live-stream'
+    $python = 'C:\Users\garre\Aegis-worktrees\foundation-integration-v1\runs\python-3.11.9-embed\python.exe'
+    Set-Location -LiteralPath $workspace -ErrorAction Stop
+    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $diagnostic = Join-Path $workspace "runs\massive_diagnostics\historical-rest-$stamp.json"
+    $secureKey = $null
+    $keyPointer = [IntPtr]::Zero
+    try {
+        $secureKey = Read-Host 'Enter your replacement MASSIVE_API_KEY' -AsSecureString
+        $keyPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureKey)
+        $env:MASSIVE_API_KEY = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($keyPointer)
+        & $python -m scripts.run_massive_historical_trade_diagnostic --output $diagnostic
+        Write-Host "Python exit code: $LASTEXITCODE"
+    }
+    finally {
+        Remove-Item Env:MASSIVE_API_KEY -ErrorAction SilentlyContinue
+        if ($keyPointer -ne [IntPtr]::Zero) {
+            [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($keyPointer)
+        }
+        if ($null -ne $secureKey) {
+            $secureKey.Dispose()
+        }
+    }
+}
 ```
 
-Review category counts and sanitized samples before changing the parser or
-declaring strategy bars complete. Delayed trades and completed bars can support
+Review raw records, category counts, and bounded sanitized samples before
+changing the parser. Historical REST evidence can confirm domain-validation
+behavior but cannot certify the WebSocket transport schema or resolve the
+legacy 6,242-message issue by itself. A bounded WebSocket run that receives
+trade payloads remains required. Delayed trades and completed bars can support
 pipeline and strategy engineering, but not live execution references. Before
 real-time shadow operation, upgrade to Massive
 Stocks Advanced, set `MASSIVE_DATA_MODE=realtime`, and prove authentication,

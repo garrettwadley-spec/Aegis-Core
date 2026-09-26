@@ -134,6 +134,54 @@ or samples, so the root cause and bar completeness are `UNCONFIRMED`. The new
 report is the required evidence before any parser correction or strategy-bar
 completeness claim.
 
+The subsequent classified delayed run authenticated and subscribed successfully
+but received only seven recognized control messages. It received zero trades,
+zero malformed messages, and zero delivery failures. The counts reconciled, but
+that quiet-window result contains no evidence about the original 6,242 rejected
+messages.
+
+### Historical REST Schema Diagnostic
+
+`scripts.run_massive_historical_trade_diagnostic` queries the documented
+[`GET /v3/trades/{stockTicker}` endpoint](https://massive.com/docs/rest/stocks/trades-quotes/trades)
+for this fixed sample:
+
+- SPY, NVDA, and AAPL
+- September 25, 2026
+- 14:00 inclusive through 14:02 exclusive in `America/New_York`
+- at most 10,000 records per symbol
+
+The request uses a Bearer authorization header as documented in the
+[REST quickstart](https://massive.com/docs/rest/quickstart). Credentials,
+authorization headers, request URLs, and pagination URLs are never written to
+the artifact. Pagination links are restricted to the expected HTTPS host/path,
+credential parameters are removed, and any remaining records are reported as
+truncated when the per-symbol limit is reached.
+
+Every returned REST trade object is preserved unchanged under the Git-ignored
+`runs/massive_diagnostics/` tree. A separate copy is mapped into the documented
+[WebSocket stock-trade schema](https://www.massive.com/docs/websocket/stocks/trades)
+and passed through the existing `MassiveStockStreamAdapter` classifier:
+
+| REST field | WebSocket field | Mapping |
+| --- | --- | --- |
+| `price` | `p` | unchanged |
+| `size` | `s` | unchanged, including zero or missing |
+| `decimal_size` | `ds` | unchanged, including fractional strings |
+| `conditions` | `c` | unchanged |
+| `exchange`, `id`, `sequence_number`, `tape` | `x`, `i`, `q`, `z` | unchanged |
+| `sip_timestamp` | `t` | Unix nanoseconds converted to milliseconds |
+| `participant_timestamp`, `trf_timestamp` | `pt`, `trft` | Unix nanoseconds converted to milliseconds |
+| request ticker | `sym` | fixed endpoint ticker |
+| fixed event type | `ev` | `T` |
+
+REST-only fields such as `correction` remain in the raw record and are not
+invented into the WebSocket message. Missing, zero, fractional, and rejected
+market values are deliberately retained. Results are labeled
+`HISTORICAL_REST_SCHEMA_DIAGNOSTIC`: they can reproduce domain/parser behavior,
+but they are not original WebSocket payloads and cannot certify WebSocket
+correctness.
+
 ## Delayed Trade Bar Contract
 
 Delayed Developer data is valid for ingestion, bar-pipeline, opening-range, and
@@ -150,6 +198,7 @@ reference, but delayed data is classified `DELAYED_MARKET_DATA` and
 .venv\Scripts\python.exe -m scripts.run_massive_fixture_demo
 .venv\Scripts\python.exe -m scripts.run_massive_live_smoke --mode delayed
 .venv\Scripts\python.exe -m scripts.run_massive_live_smoke --mode delayed --duration-seconds 300 --diagnostic-path runs/massive_diagnostics/launch-011e.json
+.venv\Scripts\python.exe -m scripts.run_massive_historical_trade_diagnostic
 .venv\Scripts\python.exe -m scripts.run_massive_live_smoke --mode realtime --symbols SPY,QQQ,NVDA --duration-seconds 180
 ```
 
