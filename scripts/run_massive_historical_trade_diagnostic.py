@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -16,11 +18,15 @@ from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
 from aegis.clock import system_clock
+from aegis.eventbus import EventBus
 from aegis.marketdata import (
+    LiveMarketDataBus,
+    LiveTrade,
     MASSIVE_API_KEY,
     MassiveDataMode,
     MassiveMessageClassification,
     MassiveStockStreamAdapter,
+    ThirtySecondBarBuilder,
     massive_credential_present,
 )
 
@@ -235,19 +241,31 @@ def fetch_historical_trades(
 
 def _positive_decimal(value: object) -> bool:
     try:
-        return Decimal(str(value)) > 0
+        quantity = Decimal(str(value))
     except (InvalidOperation, TypeError, ValueError):
         return False
+    return quantity.is_finite() and quantity > 0
 
 
 def build_historical_diagnostic(
     api_key: str,
     *,
     fetcher: Callable[[str, str], HistoricalTradeFetch] = fetch_historical_trades,
+    include_raw_records: bool = True,
 ) -> dict[str, object]:
+    event_bus = EventBus()
+    live_bus = LiveMarketDataBus(event_bus)
+    bar_builder = ThirtySecondBarBuilder(event_bus)
+    observations: list[LiveTrade] = []
+
+    def deliver(observation: object) -> None:
+        if isinstance(observation, LiveTrade):
+            observations.append(observation)
+        live_bus.ingest(observation)  # type: ignore[arg-type]
+
     adapter = MassiveStockStreamAdapter(
         symbols=SAMPLE_SYMBOLS,
-        observation_sink=lambda observation: None,
+        observation_sink=deliver,
         api_key="historical-schema-diagnostic-placeholder",
         mode=MassiveDataMode.DELAYED_TRADES,
     )
@@ -272,17 +290,64 @@ def build_historical_diagnostic(
         fractional_candidates += symbol_fractional_candidates
         for trade in raw_records:
             adapter.handle_message(map_rest_trade_to_websocket(symbol, trade))
-        symbol_reports[symbol] = {
+        symbol_report: dict[str, object] = {
             "raw_record_count": len(raw_records),
             "pages_requested": fetched.pages_requested,
             "truncated": fetched.truncated,
             "zero_size_positive_decimal_size_records": (
                 symbol_fractional_candidates
             ),
-            "raw_trades": raw_records,
         }
+        if include_raw_records:
+            symbol_report["raw_trades"] = raw_records
+        symbol_reports[symbol] = symbol_report
+
+    for symbol in SAMPLE_SYMBOLS:
+        bar_builder.advance(symbol, SAMPLE_END.astimezone(timezone.utc))
+    event_bus.dispatch()
 
     diagnostics = adapter.diagnostic_report()
+    exact_accepted_quantity = sum(
+        (trade.exact_size for trade in observations),
+        Decimal("0"),
+    )
+    exact_volume_eligible_quantity = sum(
+        (trade.exact_size for trade in observations if trade.updates_volume),
+        Decimal("0"),
+    )
+    ohlc_eligible = tuple(
+        trade
+        for trade in observations
+        if trade.updates_high_low and trade.updates_open_close
+    )
+    volume_only = tuple(
+        trade
+        for trade in observations
+        if trade.updates_volume
+        and not trade.updates_high_low
+        and not trade.updates_open_close
+    )
+    partial_price = tuple(
+        trade
+        for trade in observations
+        if trade.updates_high_low != trade.updates_open_close
+    )
+    unresolved_conditions = Counter(
+        condition
+        for trade in observations
+        for condition in trade.unresolved_conditions
+    )
+    exact_bar_volume = sum(
+        (
+            Decimal(str(bar.metadata["exact_volume_decimal"]))
+            for bar in bar_builder.bars
+        ),
+        Decimal("0"),
+    )
+    exact_incomplete_volume = sum(
+        (interval.exact_volume for interval in bar_builder.incomplete_intervals),
+        Decimal("0"),
+    )
     report: dict[str, object] = {
         "evidence_label": EVIDENCE_LABEL,
         "generated_at": system_clock.now().isoformat(),
@@ -323,12 +388,208 @@ def build_historical_diagnostic(
             "counts_reconcile": adapter.message_diagnostics.counts_reconcile,
         },
         "classification": diagnostics,
+        "bar_path": {
+            "accepted_trade_count": len(observations),
+            "exact_accepted_quantity": str(exact_accepted_quantity),
+            "volume_eligible_trade_count": sum(
+                trade.updates_volume for trade in observations
+            ),
+            "exact_volume_eligible_quantity": str(
+                exact_volume_eligible_quantity
+            ),
+            "ohlc_eligible_trade_count": len(ohlc_eligible),
+            "volume_only_trade_count": len(volume_only),
+            "partial_price_eligible_trade_count": len(partial_price),
+            "eligibility_limited_trade_count": len(
+                bar_builder.eligibility_exclusions
+            ),
+            "unresolved_condition_counts": dict(
+                sorted(unresolved_conditions.items())
+            ),
+            "bars_produced": len(bar_builder.bars),
+            "exact_bar_volume": str(exact_bar_volume),
+            "incomplete_interval_count": len(
+                bar_builder.incomplete_intervals
+            ),
+            "exact_incomplete_interval_volume": str(
+                exact_incomplete_volume
+            ),
+            "late_trade_rejection_count": len(
+                bar_builder.late_trade_rejections
+            ),
+            "bars": [
+                {
+                    "symbol": bar.symbol,
+                    "interval_start": bar.interval_start.isoformat(),
+                    "interval_end": bar.interval_end.isoformat(),
+                    "open": bar.open,
+                    "high": bar.high,
+                    "low": bar.low,
+                    "close": bar.close,
+                    "volume": bar.volume,
+                    "exact_volume_decimal": bar.metadata[
+                        "exact_volume_decimal"
+                    ],
+                    "trade_count": bar.trade_count,
+                    "source_trade_id_count": len(bar.source_trade_ids),
+                    "source_event_sequence_count": len(
+                        bar.source_event_sequences
+                    ),
+                }
+                for bar in bar_builder.bars
+            ],
+            "incomplete_intervals": [
+                {
+                    "symbol": interval.symbol,
+                    "interval_start": interval.interval_start.isoformat(),
+                    "interval_end": interval.interval_end.isoformat(),
+                    "exact_volume_decimal": str(interval.exact_volume),
+                    "trade_count": interval.trade_count,
+                    "volume_eligible_trade_count": (
+                        interval.volume_eligible_trade_count
+                    ),
+                    "high_low_eligible_trade_count": (
+                        interval.high_low_eligible_trade_count
+                    ),
+                    "open_close_eligible_trade_count": (
+                        interval.open_close_eligible_trade_count
+                    ),
+                    "missing_fields": list(interval.missing_fields),
+                    "unresolved_conditions": list(
+                        interval.unresolved_conditions
+                    ),
+                }
+                for interval in bar_builder.incomplete_intervals
+            ],
+        },
         "symbols": symbol_reports,
     }
     _assert_no_sensitive_fields(report)
     serialized = json.dumps(report, sort_keys=True)
     if api_key and api_key in serialized:
         raise RuntimeError("credential value reached diagnostic output")
+    return report
+
+
+def _raw_quantity(trade: Mapping[str, object]) -> Decimal:
+    field = "decimal_size" if "decimal_size" in trade else "size"
+    value = trade.get(field)
+    if isinstance(value, bool):
+        raise ValueError(f"saved trade has invalid {field}")
+    try:
+        quantity = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise ValueError(f"saved trade has invalid {field}") from exc
+    if not quantity.is_finite() or quantity <= 0:
+        raise ValueError(f"saved trade has invalid {field}")
+    return quantity
+
+
+def reprocess_saved_historical_diagnostic(
+    input_path: Path,
+) -> dict[str, object]:
+    original_bytes = input_path.read_bytes()
+    input_sha256 = hashlib.sha256(original_bytes).hexdigest().upper()
+    try:
+        original = json.loads(original_bytes)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("input report is not valid JSON") from exc
+    if not isinstance(original, dict):
+        raise ValueError("input report must be a JSON object")
+    _assert_no_sensitive_fields(original)
+    if original.get("evidence_label") != EVIDENCE_LABEL:
+        raise ValueError("input report has the wrong evidence label")
+
+    records_by_symbol: dict[str, tuple[dict[str, object], ...]] = {}
+    raw_records: list[dict[str, object]] = []
+    for symbol in SAMPLE_SYMBOLS:
+        symbol_report = original.get("symbols", {}).get(symbol)
+        if not isinstance(symbol_report, Mapping):
+            raise ValueError(f"input report is missing symbol {symbol}")
+        records = symbol_report.get("raw_trades")
+        if not isinstance(records, list):
+            raise ValueError(f"input report is missing raw trades for {symbol}")
+        copied_records: list[dict[str, object]] = []
+        for record in records:
+            if not isinstance(record, Mapping):
+                raise ValueError("saved raw trade must be an object")
+            copied = dict(record)
+            _assert_no_sensitive_fields(copied)
+            copied_records.append(copied)
+            raw_records.append(copied)
+        records_by_symbol[symbol] = tuple(copied_records)
+
+    def fetcher(symbol: str, api_key: str) -> HistoricalTradeFetch:
+        del api_key
+        source = original["symbols"][symbol]
+        return HistoricalTradeFetch(
+            symbol=symbol,
+            records=records_by_symbol[symbol],
+            pages_requested=int(source.get("pages_requested", 0)),
+            truncated=bool(source.get("truncated", False)),
+        )
+
+    report = build_historical_diagnostic(
+        "",
+        fetcher=fetcher,
+        include_raw_records=False,
+    )
+    original_counts = original["classification"]["classification_counts"]
+    after_counts = report["classification"]["classification_counts"]
+    zero_size_fractional = tuple(
+        trade
+        for trade in raw_records
+        if trade.get("size") == 0
+        and _positive_decimal(trade.get("decimal_size"))
+    )
+    legacy_size_total = sum(
+        (Decimal(str(trade.get("size", 0))) for trade in raw_records),
+        Decimal("0"),
+    )
+    exact_quantity_total = sum(
+        (_raw_quantity(trade) for trade in raw_records),
+        Decimal("0"),
+    )
+    formerly_rejected_quantity = sum(
+        (_raw_quantity(trade) for trade in zero_size_fractional),
+        Decimal("0"),
+    )
+    report["source"] = {
+        "transport": "SAVED_HISTORICAL_REST_ARTIFACT",
+        "input_artifact": str(input_path.resolve()),
+        "input_sha256": input_sha256,
+        "network_request_performed": False,
+    }
+    report["evidence_boundary"] = (
+        "Saved historical REST records mapped through the documented WebSocket "
+        "trade schema and the production adapter/bus/bar path; not original "
+        "WebSocket payload evidence."
+    )
+    report["before_after"] = {
+        "input_artifact_sha256": input_sha256,
+        "total_records": len(raw_records),
+        "accepted_before": original["summary"]["accepted_trades"],
+        "accepted_after": report["summary"]["accepted_trades"],
+        "rejected_before": original["summary"]["malformed_messages"],
+        "rejected_after": report["summary"]["malformed_messages"],
+        "classification_counts_before": original_counts,
+        "classification_counts_after": after_counts,
+        "recovered_fractional_trade_count": len(zero_size_fractional),
+        "legacy_integer_size_total": str(legacy_size_total),
+        "exact_decimal_quantity_total": str(exact_quantity_total),
+        "total_quantity_delta_vs_legacy_size": str(
+            exact_quantity_total - legacy_size_total
+        ),
+        "formerly_rejected_fractional_quantity": str(
+            formerly_rejected_quantity
+        ),
+        "additional_fractional_quantity_on_nonzero_size_records": str(
+            exact_quantity_total
+            - legacy_size_total
+            - formerly_rejected_quantity
+        ),
+    }
+    _assert_no_sensitive_fields(report)
     return report
 
 
@@ -344,27 +605,13 @@ def write_historical_diagnostic(
     return path
 
 
-def _default_output_path() -> Path:
+def _default_output_path(*, reprocessed: bool = False) -> Path:
     stamp = system_clock.now().strftime("%Y%m%d-%H%M%S")
-    return Path("runs/massive_diagnostics") / f"historical-rest-{stamp}.json"
+    label = "historical-reprocess" if reprocessed else "historical-rest"
+    return Path("runs/massive_diagnostics") / f"{label}-{stamp}.json"
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--output", type=Path)
-    args = parser.parse_args()
-
-    print(EVIDENCE_LABEL)
-    if not massive_credential_present():
-        print("MASSIVE_API_KEY is not present in the local process environment.")
-        print("HISTORICAL REST DIAGNOSTIC: BLOCKED_BY_MISSING_CREDENTIAL")
-        return 2
-
-    report = build_historical_diagnostic(os.environ[MASSIVE_API_KEY])
-    output_path = write_historical_diagnostic(
-        report,
-        args.output or _default_output_path(),
-    )
+def _print_report(report: Mapping[str, object], output_path: Path) -> None:
     summary = report["summary"]
     symbols = report["symbols"]
     for symbol in SAMPLE_SYMBOLS:
@@ -386,8 +633,62 @@ def main() -> int:
         "Zero-size positive-decimal-size records: "
         f"{summary['zero_size_positive_decimal_size_records']}"
     )
+    bar_path = report["bar_path"]
+    print(f"OHLC-eligible trades: {bar_path['ohlc_eligible_trade_count']}")
+    print(f"Volume-only trades: {bar_path['volume_only_trade_count']}")
+    print(f"Bars produced: {bar_path['bars_produced']}")
+    print(f"Incomplete intervals: {bar_path['incomplete_interval_count']}")
+    print(f"Unresolved conditions: {bar_path['unresolved_condition_counts']}")
     print(f"Diagnostic artifact: {output_path.resolve()}")
     print("WEBSOCKET CORRECTNESS CERTIFIED: NO")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--input-report", type=Path)
+    args = parser.parse_args()
+
+    print(EVIDENCE_LABEL)
+    if args.input_report is not None:
+        report = reprocess_saved_historical_diagnostic(args.input_report)
+        output_path = write_historical_diagnostic(
+            report,
+            args.output or _default_output_path(reprocessed=True),
+        )
+        before_after = report["before_after"]
+        print(f"Input SHA-256: {before_after['input_artifact_sha256']}")
+        print(
+            "Accepted before/after: "
+            f"{before_after['accepted_before']}/{before_after['accepted_after']}"
+        )
+        print(
+            "Rejected before/after: "
+            f"{before_after['rejected_before']}/{before_after['rejected_after']}"
+        )
+        print(
+            "Recovered fractional trades: "
+            f"{before_after['recovered_fractional_trade_count']}"
+        )
+        print(
+            "Exact quantity before/after: "
+            f"{before_after['legacy_integer_size_total']}/"
+            f"{before_after['exact_decimal_quantity_total']}"
+        )
+        _print_report(report, output_path)
+        return 0
+
+    if not massive_credential_present():
+        print("MASSIVE_API_KEY is not present in the local process environment.")
+        print("HISTORICAL REST DIAGNOSTIC: BLOCKED_BY_MISSING_CREDENTIAL")
+        return 2
+
+    report = build_historical_diagnostic(os.environ[MASSIVE_API_KEY])
+    output_path = write_historical_diagnostic(
+        report,
+        args.output or _default_output_path(),
+    )
+    _print_report(report, output_path)
     return 0
 
 

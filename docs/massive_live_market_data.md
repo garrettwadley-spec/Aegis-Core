@@ -76,10 +76,49 @@ status only and never reach bar or strategy logic. Aegis `system_clock` supplies
 `received_at`, `created_at`, message buckets, and handler timing.
 
 The official [Massive trade schema](https://www.massive.com/docs/websocket/stocks/trades)
-documents integer size `s` and fractional-share size `ds`. Aegis continues to
-use `s` until a sanitized external rejection proves that a different mapping is
-required. Diagnostics retain both fields when present, which permits a targeted
-correction without guessing or weakening validation.
+documents integer size `s` and fractional-share size `ds`. If `ds` is present,
+Aegis parses it as the effective quantity with `Decimal`; otherwise it uses
+legacy `s`. A present but malformed, non-finite, zero, or negative `ds` is
+rejected without falling back to `s`. The two fields are alternate
+representations of one quantity and are never added together.
+
+The original `s`, original `ds`, selected field, and exact decimal quantity are
+retained in immutable `LiveTrade` metadata. `LiveTrade.size` remains a float at
+the existing public compatibility boundary. The 30-second bar accumulator uses
+the exact `Decimal` quantity and converts to the existing float `bar.volume`
+only when it closes the bar; `exact_volume_decimal` remains in immutable bar
+metadata for exact reconciliation.
+
+### Trade Eligibility
+
+Parsing and bar eligibility are separate. A valid trade always retains all
+reported conditions. At normalization, Aegis applies the consolidated update
+rules for every condition encountered in the saved LAUNCH-011F sample:
+
+| Condition | Name | High/low | Open/close | Volume |
+| --- | --- | --- | --- | --- |
+| 2 | Average Price Trade | No | No | Yes |
+| 10 | Derivatively Priced | Yes | No | Yes |
+| 14 | Intermarket Sweep | Yes | Yes | Yes |
+| 37 | Odd Lot Trade | No | No | Yes |
+| 41 | Trade Thru Exempt | Yes | Yes | Yes |
+| 52 | Contingent Trade | No | No | Yes |
+| 53 | Qualified Contingent Trade | No | No | Yes |
+
+Massive's documented combination rule applies independently to each aggregate
+field: if any condition says no, no takes precedence. Unknown conditions remain
+explicit in `unresolved_conditions` and conservatively update no OHLCV field;
+they are not parser failures and are reported separately.
+
+Condition 37 therefore contributes its exact quantity to volume without
+setting open, high, low, or close. An interval containing volume-eligible
+trades but no complete price coverage is retained as an
+`IncompleteBarInterval`; it does not emit an invented candle. Eligibility
+exclusions, incomplete intervals, late-trade rejections, and parser failures
+remain separate diagnostics. These rules follow Massive's
+[fractional-share guidance](https://massive.com/knowledge-base/article/how-does-massive-handle-fractional-share-trades),
+[trade eligibility guidance](https://www.massive.com/blog/understanding-trade-eligibility),
+and documented [conditions endpoint](https://massive.com/docs/rest/stocks/market-operations/condition-codes).
 
 ## Observability
 
@@ -182,11 +221,53 @@ market values are deliberately retained. Results are labeled
 but they are not original WebSocket payloads and cannot certify WebSocket
 correctness.
 
+### LAUNCH-011F Saved-Sample Reprocessing
+
+The original Git-ignored report was reprocessed without a network request:
+
+```text
+runs/massive_diagnostics/historical-rest-20260926-030554.json
+SHA-256: 5345463F719A40A3F538A864E51021374437760B4ABECCF60D6BB768AF39405C
+```
+
+Its 9,367 unchanged raw records produced this before/after evidence through the
+production adapter, live bus, and bar builder:
+
+| Measure | Before | After |
+| --- | ---: | ---: |
+| Accepted trades | 5,340 | 9,367 |
+| Invalid-size rejections | 4,027 | 0 |
+| Exact accepted quantity | 288,334 | 288,466.398509 |
+
+All 4,027 recovered records had `size=0` and positive `decimal_size`; their
+exact quantity was 125.217355 shares. Another 7.181154 fractional shares were
+previously omitted from records whose rounded-down integer `size` was nonzero,
+for a total legacy-size undercount of 132.398509 shares. This is a quantity
+delta, not a rejected-record percentage.
+
+The repaired path classified 1,881 trades as fully OHLC-eligible and 7,486 as
+volume-only, produced 12 bars, preserved all 288,466.398509 shares in exact bar
+volume, and reported zero unresolved conditions, incomplete intervals,
+late-trade rejections, parser rejections, or delivery failures. The fixture's
+former condition-37 price trades were corrected to price-eligible conditions;
+the odd-lot regression proves an extreme odd-lot price cannot alter OHLC.
+
+The separate before/after artifact is:
+
+```text
+runs/massive_diagnostics/historical-rest-20260926-030554-before-after.json
+SHA-256: F56B4D2D0081ED5BD39F00BD1BB0EBB56E2E1B40B4214C3B2C10AFCF2077FAEF
+```
+
+This verifies the historical parser repair. It does not identify the original
+6,242 WebSocket rejections or certify WebSocket correctness; a bounded run that
+receives actual `T` payloads is still required.
+
 ## Delayed Trade Bar Contract
 
 Delayed Developer data is valid for ingestion, bar-pipeline, opening-range, and
-strategy engineering. Eligible trades still define open, high, low, close,
-volume, and trade count. With no quote entitlement, `latest_bid` and
+strategy engineering. Condition eligibility independently controls open/close,
+high/low, and volume contribution. With no quote entitlement, `latest_bid` and
 `latest_ask` remain `None`; the system neither fabricates quotes nor creates flat
 candles for intervals without trades. The completed-bar close remains a signal
 reference, but delayed data is classified `DELAYED_MARKET_DATA` and
@@ -199,6 +280,7 @@ reference, but delayed data is classified `DELAYED_MARKET_DATA` and
 .venv\Scripts\python.exe -m scripts.run_massive_live_smoke --mode delayed
 .venv\Scripts\python.exe -m scripts.run_massive_live_smoke --mode delayed --duration-seconds 300 --diagnostic-path runs/massive_diagnostics/launch-011e.json
 .venv\Scripts\python.exe -m scripts.run_massive_historical_trade_diagnostic
+.venv\Scripts\python.exe -m scripts.run_massive_historical_trade_diagnostic --input-report runs/massive_diagnostics/historical-rest-20260926-030554.json --output runs/massive_diagnostics/historical-rest-20260926-030554-before-after.json
 .venv\Scripts\python.exe -m scripts.run_massive_live_smoke --mode realtime --symbols SPY,QQQ,NVDA --duration-seconds 180
 ```
 

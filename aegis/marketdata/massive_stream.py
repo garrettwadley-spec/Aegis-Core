@@ -5,6 +5,7 @@ import asyncio
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from enum import Enum
 import json
 from math import ceil, isfinite
@@ -28,6 +29,34 @@ DEFAULT_MASSIVE_WS_URL = MASSIVE_DELAYED_WS_URL
 DEFAULT_MASSIVE_SYMBOLS = ("SPY", "QQQ", "NVDA", "AAPL", "TSLA")
 MAX_MASSIVE_SYMBOLS = 20
 MAX_DIAGNOSTIC_SAMPLES_PER_REASON = 5
+
+
+@dataclass(frozen=True)
+class _ConditionUpdateRule:
+    updates_high_low: bool
+    updates_open_close: bool
+    updates_volume: bool
+
+
+@dataclass(frozen=True)
+class _TradeEligibility:
+    updates_high_low: bool
+    updates_open_close: bool
+    updates_volume: bool
+    unresolved_conditions: tuple[str, ...]
+
+
+# Consolidated rules for every condition observed in the saved LAUNCH-011F
+# sample. Massive's documented combination rule makes any False take precedence.
+_MASSIVE_SAMPLE_CONDITION_RULES = {
+    "2": _ConditionUpdateRule(False, False, True),
+    "10": _ConditionUpdateRule(True, False, True),
+    "14": _ConditionUpdateRule(True, True, True),
+    "37": _ConditionUpdateRule(False, False, True),
+    "41": _ConditionUpdateRule(True, True, True),
+    "52": _ConditionUpdateRule(False, False, True),
+    "53": _ConditionUpdateRule(False, False, True),
+}
 
 
 class MassiveMessageClassification(str, Enum):
@@ -321,7 +350,71 @@ def _validate_numeric_field(
         )
 
 
-def _validate_market_message(message: Mapping[str, Any], event_type: str) -> None:
+def _effective_trade_quantity(
+    message: Mapping[str, Any],
+) -> tuple[Decimal, str]:
+    field = "ds" if "ds" in message else "s"
+    label = "decimal_size" if field == "ds" else "size"
+    if field not in message:
+        raise _MessageValidationError(
+            MassiveMessageClassification.MISSING_OR_INVALID_SIZE,
+            field=field,
+            value="<missing>",
+            reason_key=f"{label}_missing",
+            reason=f"required trade quantity field {field} is missing",
+        )
+    value = message.get(field)
+    try:
+        if isinstance(value, bool):
+            raise InvalidOperation
+        quantity = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        quantity = Decimal("NaN")
+    if not quantity.is_finite() or quantity <= 0:
+        raise _MessageValidationError(
+            MassiveMessageClassification.MISSING_OR_INVALID_SIZE,
+            field=field,
+            value=value,
+            reason_key=f"{label}_invalid",
+            reason=f"{field} must be positive and finite",
+        )
+    return quantity, field
+
+
+def _trade_conditions(message: Mapping[str, Any]) -> tuple[str, ...]:
+    raw_conditions = message.get("c")
+    if raw_conditions is None:
+        return ()
+    if not isinstance(raw_conditions, (list, tuple)):
+        raise TypeError("Massive trade conditions must be an array")
+    return tuple(str(item) for item in raw_conditions)
+
+
+def _trade_eligibility(conditions: tuple[str, ...]) -> _TradeEligibility:
+    rules: list[_ConditionUpdateRule] = []
+    unresolved: list[str] = []
+    for condition in conditions:
+        rule = _MASSIVE_SAMPLE_CONDITION_RULES.get(condition)
+        if rule is None:
+            unresolved.append(condition)
+        else:
+            rules.append(rule)
+    if unresolved:
+        return _TradeEligibility(False, False, False, tuple(unresolved))
+    if not rules:
+        return _TradeEligibility(True, True, True, ())
+    return _TradeEligibility(
+        updates_high_low=all(rule.updates_high_low for rule in rules),
+        updates_open_close=all(rule.updates_open_close for rule in rules),
+        updates_volume=all(rule.updates_volume for rule in rules),
+        unresolved_conditions=(),
+    )
+
+
+def _validate_market_message(
+    message: Mapping[str, Any],
+    event_type: str,
+) -> tuple[Decimal, str] | None:
     symbol = message.get("sym")
     if "sym" not in message:
         raise _MessageValidationError(
@@ -367,13 +460,7 @@ def _validate_market_message(message: Mapping[str, Any], event_type: str) -> Non
             MassiveMessageClassification.MISSING_OR_INVALID_PRICE,
             positive=True,
         )
-        _validate_numeric_field(
-            message,
-            "s",
-            MassiveMessageClassification.MISSING_OR_INVALID_SIZE,
-            positive=True,
-        )
-        return
+        return _effective_trade_quantity(message)
 
     for field in ("bp", "ap"):
         _validate_numeric_field(
@@ -389,12 +476,14 @@ def _validate_market_message(message: Mapping[str, Any], event_type: str) -> Non
             MassiveMessageClassification.MISSING_OR_INVALID_SIZE,
             positive=False,
         )
+    return None
 
 
 def normalize_massive_message(
     message: Mapping[str, Any],
     *,
     received_at: datetime | None = None,
+    _validated_trade_quantity: tuple[Decimal, str] | None = None,
 ) -> LiveTrade | LiveQuote | None:
     """Normalize Massive T/Q messages and leave status messages separate."""
 
@@ -404,11 +493,17 @@ def normalize_massive_message(
     observed_at = system_clock.now() if received_at is None else received_at
     source_timestamp = parse_massive_sip_timestamp(message.get("t"))
     if event_type == "T":
-        conditions = tuple(str(item) for item in (message.get("c") or ()))
+        quantity, quantity_source = (
+            _validated_trade_quantity
+            if _validated_trade_quantity is not None
+            else _effective_trade_quantity(message)
+        )
+        conditions = _trade_conditions(message)
+        eligibility = _trade_eligibility(conditions)
         return LiveTrade(
             symbol=message.get("sym", ""),
             price=message.get("p"),
-            size=message.get("s"),
+            size=float(quantity),
             exchange=message.get("x"),
             trade_id=message.get("i"),
             conditions=conditions,
@@ -422,6 +517,16 @@ def normalize_massive_message(
                 "participant_timestamp": message.get("pt"),
                 "tape": message.get("z"),
                 "conditions": conditions,
+                "provider_size_present": "s" in message,
+                "provider_size": message.get("s"),
+                "provider_decimal_size_present": "ds" in message,
+                "provider_decimal_size": message.get("ds"),
+                "effective_quantity_source": quantity_source,
+                "effective_quantity_decimal": str(quantity),
+                "updates_high_low": eligibility.updates_high_low,
+                "updates_open_close": eligibility.updates_open_close,
+                "updates_volume": eligibility.updates_volume,
+                "unresolved_conditions": eligibility.unresolved_conditions,
             },
         )
     quote_condition = message.get("c")
@@ -868,10 +973,11 @@ class MassiveStockStreamAdapter:
                 )
                 return None
             try:
-                _validate_market_message(message, event_type)
+                validated_quantity = _validate_market_message(message, event_type)
                 observation = normalize_massive_message(
                     message,
                     received_at=received_at,
+                    _validated_trade_quantity=validated_quantity,
                 )
             except _MessageValidationError as exc:
                 self._record_rejection_or_ignored(

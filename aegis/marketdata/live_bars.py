@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
 from aegis.clock import system_clock
 from aegis.clock.utc import ensure_utc
@@ -36,28 +37,77 @@ class LateTradeRejection:
     reason: str = "interval_already_closed"
 
 
+@dataclass(frozen=True)
+class TradeEligibilityExclusion:
+    symbol: str
+    trade_id: str | None
+    source_timestamp: datetime
+    conditions: tuple[str, ...]
+    updates_high_low: bool
+    updates_open_close: bool
+    updates_volume: bool
+    unresolved_conditions: tuple[str, ...]
+    reason: str
+
+
+@dataclass(frozen=True)
+class IncompleteBarInterval:
+    symbol: str
+    interval_start: datetime
+    interval_end: datetime
+    exact_volume: Decimal
+    trade_count: int
+    volume_eligible_trade_count: int
+    high_low_eligible_trade_count: int
+    open_close_eligible_trade_count: int
+    missing_fields: tuple[str, ...]
+    unresolved_conditions: tuple[str, ...]
+    source_trade_ids: tuple[str, ...]
+    source_event_sequences: tuple[int, ...]
+
+
 @dataclass
 class _ActiveBar:
     symbol: str
     interval_start: datetime
     interval_end: datetime
-    open: float
-    high: float
-    low: float
-    close: float
-    volume: float
-    trade_count: int
     trace_id: str
     correlation_id: str
+    open: float | None = None
+    high: float | None = None
+    low: float | None = None
+    close: float | None = None
+    exact_volume: Decimal = field(default_factory=lambda: Decimal("0"))
+    trade_count: int = 0
+    volume_eligible_trade_count: int = 0
+    high_low_eligible_trade_count: int = 0
+    open_close_eligible_trade_count: int = 0
+    eligibility_limited_trade_count: int = 0
     source_trade_ids: list[str] = field(default_factory=list)
     source_event_sequences: list[int] = field(default_factory=list)
+    unresolved_conditions: set[str] = field(default_factory=set)
 
     def add(self, trade: LiveTrade, event_sequence: int) -> None:
-        self.high = max(self.high, trade.price)
-        self.low = min(self.low, trade.price)
-        self.close = trade.price
-        self.volume += trade.size
         self.trade_count += 1
+        if trade.updates_volume:
+            self.exact_volume += trade.exact_size
+            self.volume_eligible_trade_count += 1
+        if trade.updates_open_close:
+            if self.open is None:
+                self.open = trade.price
+            self.close = trade.price
+            self.open_close_eligible_trade_count += 1
+        if trade.updates_high_low:
+            self.high = trade.price if self.high is None else max(self.high, trade.price)
+            self.low = trade.price if self.low is None else min(self.low, trade.price)
+            self.high_low_eligible_trade_count += 1
+        if not (
+            trade.updates_high_low
+            and trade.updates_open_close
+            and trade.updates_volume
+        ):
+            self.eligibility_limited_trade_count += 1
+        self.unresolved_conditions.update(trade.unresolved_conditions)
         if trade.trade_id is not None:
             self.source_trade_ids.append(trade.trade_id)
         self.source_event_sequences.append(event_sequence)
@@ -73,6 +123,8 @@ class ThirtySecondBarBuilder(Subscriber):
         self._latest_quotes: dict[str, LiveQuote] = {}
         self._bars: list[ThirtySecondBar] = []
         self._late_trade_rejections: list[LateTradeRejection] = []
+        self._eligibility_exclusions: list[TradeEligibilityExclusion] = []
+        self._incomplete_intervals: list[IncompleteBarInterval] = []
         event_bus.subscribe(LIVE_TRADE_RECEIVED, self)
         event_bus.subscribe(LIVE_QUOTE_RECEIVED, self)
 
@@ -83,6 +135,14 @@ class ThirtySecondBarBuilder(Subscriber):
     @property
     def late_trade_rejections(self) -> tuple[LateTradeRejection, ...]:
         return tuple(self._late_trade_rejections)
+
+    @property
+    def eligibility_exclusions(self) -> tuple[TradeEligibilityExclusion, ...]:
+        return tuple(self._eligibility_exclusions)
+
+    @property
+    def incomplete_intervals(self) -> tuple[IncompleteBarInterval, ...]:
+        return tuple(self._incomplete_intervals)
 
     def receive(self, event: Event) -> None:
         if event.sequence_number is None:
@@ -118,24 +178,37 @@ class ThirtySecondBarBuilder(Subscriber):
         key = (trade.symbol, interval_start)
         active = self._active.get(key)
         if active is None:
-            trade_ids = [] if trade.trade_id is None else [trade.trade_id]
-            self._active[key] = _ActiveBar(
+            active = _ActiveBar(
                 symbol=trade.symbol,
                 interval_start=interval_start,
                 interval_end=interval_end,
-                open=trade.price,
-                high=trade.price,
-                low=trade.price,
-                close=trade.price,
-                volume=trade.size,
-                trade_count=1,
                 trace_id=trade.trace_id,
                 correlation_id=trade.correlation_id,
-                source_trade_ids=trade_ids,
-                source_event_sequences=[event_sequence],
             )
-        else:
-            active.add(trade, event_sequence)
+            self._active[key] = active
+        active.add(trade, event_sequence)
+        if not (
+            trade.updates_high_low
+            and trade.updates_open_close
+            and trade.updates_volume
+        ):
+            self._eligibility_exclusions.append(
+                TradeEligibilityExclusion(
+                    symbol=trade.symbol,
+                    trade_id=trade.trade_id,
+                    source_timestamp=trade.source_timestamp,
+                    conditions=trade.conditions,
+                    updates_high_low=trade.updates_high_low,
+                    updates_open_close=trade.updates_open_close,
+                    updates_volume=trade.updates_volume,
+                    unresolved_conditions=trade.unresolved_conditions,
+                    reason=(
+                        "unresolved_conditions"
+                        if trade.unresolved_conditions
+                        else "documented_condition_rules"
+                    ),
+                )
+            )
         return True
 
     def process_quote(self, quote: LiveQuote) -> None:
@@ -167,7 +240,43 @@ class ThirtySecondBarBuilder(Subscriber):
             self._close(self._active.pop(key))
         self._watermarks[symbol] = timestamp
 
-    def _close(self, active: _ActiveBar) -> ThirtySecondBar:
+    def _close(self, active: _ActiveBar) -> ThirtySecondBar | None:
+        missing_fields = tuple(
+            field_name
+            for field_name, value in (
+                ("open", active.open),
+                ("high", active.high),
+                ("low", active.low),
+                ("close", active.close),
+                ("volume", active.exact_volume if active.exact_volume > 0 else None),
+            )
+            if value is None
+        )
+        if missing_fields:
+            self._incomplete_intervals.append(
+                IncompleteBarInterval(
+                    symbol=active.symbol,
+                    interval_start=active.interval_start,
+                    interval_end=active.interval_end,
+                    exact_volume=active.exact_volume,
+                    trade_count=active.trade_count,
+                    volume_eligible_trade_count=active.volume_eligible_trade_count,
+                    high_low_eligible_trade_count=active.high_low_eligible_trade_count,
+                    open_close_eligible_trade_count=(
+                        active.open_close_eligible_trade_count
+                    ),
+                    missing_fields=missing_fields,
+                    unresolved_conditions=tuple(sorted(active.unresolved_conditions)),
+                    source_trade_ids=tuple(active.source_trade_ids),
+                    source_event_sequences=tuple(active.source_event_sequences),
+                )
+            )
+            return None
+
+        assert active.open is not None
+        assert active.high is not None
+        assert active.low is not None
+        assert active.close is not None
         quote = self._latest_quotes.get(active.symbol)
         bar = ThirtySecondBar(
             symbol=active.symbol,
@@ -177,7 +286,7 @@ class ThirtySecondBarBuilder(Subscriber):
             high=active.high,
             low=active.low,
             close=active.close,
-            volume=active.volume,
+            volume=float(active.exact_volume),
             trade_count=active.trade_count,
             latest_bid=None if quote is None else quote.bid_price,
             latest_ask=None if quote is None else quote.ask_price,
@@ -186,7 +295,19 @@ class ThirtySecondBarBuilder(Subscriber):
             created_at=system_clock.now(),
             trace_id=active.trace_id,
             correlation_id=active.correlation_id,
-            _metadata={"bar_price_source": "eligible_trades"},
+            _metadata={
+                "bar_price_source": "condition_eligible_trades",
+                "exact_volume_decimal": str(active.exact_volume),
+                "volume_eligible_trade_count": active.volume_eligible_trade_count,
+                "high_low_eligible_trade_count": active.high_low_eligible_trade_count,
+                "open_close_eligible_trade_count": (
+                    active.open_close_eligible_trade_count
+                ),
+                "eligibility_limited_trade_count": (
+                    active.eligibility_limited_trade_count
+                ),
+                "unresolved_conditions": tuple(sorted(active.unresolved_conditions)),
+            },
         )
         self._bars.append(bar)
         self._event_bus.publish(

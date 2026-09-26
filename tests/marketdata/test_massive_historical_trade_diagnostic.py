@@ -21,13 +21,14 @@ from scripts.run_massive_historical_trade_diagnostic import (
     build_historical_diagnostic,
     fetch_historical_trades,
     map_rest_trade_to_websocket,
+    reprocess_saved_historical_diagnostic,
     write_historical_diagnostic,
 )
 
 
 def rest_trade(**overrides: object) -> dict[str, object]:
     trade: dict[str, object] = {
-        "conditions": [12, 37],
+        "conditions": [14, 41],
         "correction": 0,
         "decimal_size": "100.0",
         "exchange": 4,
@@ -151,16 +152,15 @@ class TestMassiveHistoricalTradeDiagnostic(unittest.TestCase):
         self.assertEqual(report["symbols"]["SPY"]["raw_trades"][1]["size"], 0)
         self.assertEqual(report["symbols"]["SPY"]["raw_trades"][1]["decimal_size"], "0.25")
         self.assertEqual(report["summary"]["total_raw_records"], 4)
-        self.assertEqual(report["summary"]["accepted_trades"], 3)
-        self.assertEqual(report["summary"]["malformed_messages"], 1)
+        self.assertEqual(report["summary"]["accepted_trades"], 4)
+        self.assertEqual(report["summary"]["malformed_messages"], 0)
         self.assertEqual(report["summary"]["zero_size_positive_decimal_size_records"], 1)
         self.assertTrue(report["summary"]["counts_reconcile"])
         counts = report["classification"]["classification_counts"]
-        self.assertEqual(counts[MassiveMessageClassification.ACCEPTED_TRADE.value], 3)
-        self.assertEqual(counts[MassiveMessageClassification.MISSING_OR_INVALID_SIZE.value], 1)
-        sample = report["classification"]["samples_by_reason"]["size_invalid"][0]
-        self.assertEqual(sample["safe_market_data_fields"]["s"], 0)
-        self.assertEqual(sample["safe_market_data_fields"]["ds"], "0.25")
+        self.assertEqual(counts[MassiveMessageClassification.ACCEPTED_TRADE.value], 4)
+        self.assertEqual(counts[MassiveMessageClassification.MISSING_OR_INVALID_SIZE.value], 0)
+        self.assertEqual(report["bar_path"]["exact_accepted_quantity"], "300.25")
+        self.assertEqual(report["bar_path"]["bars_produced"], 3)
         self.assertNotIn("SECRET_NOT_FOR_ARTIFACT", json.dumps(report))
 
         with TemporaryDirectory() as directory:
@@ -189,6 +189,26 @@ class TestMassiveHistoricalTradeDiagnostic(unittest.TestCase):
     def test_fixed_window_is_exactly_two_new_york_minutes(self):
         self.assertEqual(SAMPLE_END_NS - SAMPLE_START_NS, 120_000_000_000)
         self.assertEqual(SAMPLE_START.utcoffset(), timedelta(hours=-4))
+
+    @unittest.skipUnless(
+        Path("runs/massive_diagnostics/historical-rest-20260926-030554.json").is_file(),
+        "local saved Massive historical diagnostic is unavailable",
+    )
+    def test_saved_real_sample_reprocesses_through_production_path(self):
+        report = reprocess_saved_historical_diagnostic(
+            Path("runs/massive_diagnostics/historical-rest-20260926-030554.json")
+        )
+
+        self.assertEqual(report["before_after"]["total_records"], 9367)
+        self.assertEqual(report["before_after"]["accepted_before"], 5340)
+        self.assertEqual(report["before_after"]["accepted_after"], 9367)
+        self.assertEqual(report["before_after"]["rejected_after"], 0)
+        self.assertEqual(report["before_after"]["recovered_fractional_trade_count"], 4027)
+        self.assertEqual(report["before_after"]["exact_decimal_quantity_total"], "288466.398509")
+        self.assertEqual(report["bar_path"]["volume_only_trade_count"], 7486)
+        self.assertEqual(report["bar_path"]["ohlc_eligible_trade_count"], 1881)
+        self.assertEqual(report["bar_path"]["bars_produced"], 12)
+        self.assertEqual(report["bar_path"]["unresolved_condition_counts"], {})
 
 
 if __name__ == "__main__":

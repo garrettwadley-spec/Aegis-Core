@@ -94,7 +94,9 @@ def main() -> None:
                         "s": size,
                         "x": 4,
                         "i": f"M{index + 1:02d}{suffix}",
-                        "c": [12, 37],
+                        # These deterministic candles are ordinary price-forming
+                        # fixtures, not odd-lot condition-37 trades.
+                        "c": [14, 41],
                         "t": _milliseconds(
                             interval_start + timedelta(seconds=offset)
                         ),

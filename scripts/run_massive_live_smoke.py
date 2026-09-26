@@ -84,15 +84,23 @@ async def _run(
         ),
     )
     await adapter.run(max_seconds=duration_seconds)
+    observed_symbols = tuple(sorted({item.symbol for item in observations}))
+    through_timestamp = system_clock.now()
+    for symbol in observed_symbols:
+        bar_builder.advance(symbol, through_timestamp)
+    event_bus.dispatch()
     artifact_path = adapter.write_diagnostic_report(diagnostic_path)
 
     status = adapter.status
     latency = adapter.latency_statistics
     capacity = adapter.capacity_statistics
     diagnostics = adapter.message_diagnostics
-    observed_symbols = tuple(sorted({item.symbol for item in observations}))
     bars_by_symbol = Counter(bar.symbol for bar in bar_builder.bars)
     latest_bar = bar_builder.bars[-1] if bar_builder.bars else None
+    unresolved_eligibility = sum(
+        bool(exclusion.unresolved_conditions)
+        for exclusion in bar_builder.eligibility_exclusions
+    )
     bucket_count = len(capacity.messages_per_second)
     mean_messages_per_second = (
         0.0
@@ -134,6 +142,13 @@ async def _run(
     )
     print(f"Delivery failures: {diagnostics.delivery_failures}")
     print(f"Diagnostic artifact: {artifact_path}")
+    print(
+        "Documented eligibility-limited trades: "
+        f"{len(bar_builder.eligibility_exclusions) - unresolved_eligibility}"
+    )
+    print(f"Unresolved-condition trades: {unresolved_eligibility}")
+    print(f"Incomplete price-coverage intervals: {len(bar_builder.incomplete_intervals)}")
+    print(f"Late-trade exclusions: {len(bar_builder.late_trade_rejections)}")
     potentially_bar_affecting = sum(
         diagnostics.count(classification)
         for classification in (
@@ -148,8 +163,14 @@ async def _run(
     )
     bar_completeness = (
         "UNCONFIRMED"
-        if potentially_bar_affecting or diagnostics.delivery_failures
-        else "NO_REJECTED_TRADE_IMPACT_OBSERVED"
+        if (
+            potentially_bar_affecting
+            or diagnostics.delivery_failures
+            or unresolved_eligibility
+            or bar_builder.incomplete_intervals
+            or bar_builder.late_trade_rejections
+        )
+        else "NO_UNRESOLVED_TRADE_IMPACT_OBSERVED"
     )
     print(f"Strategy bar completeness: {bar_completeness}")
     print()
@@ -215,6 +236,9 @@ async def _run(
             and capacity.dropped_messages == 0
             and capacity.malformed_messages == 0
             and bar_builder.bars
+            and unresolved_eligibility == 0
+            and not bar_builder.incomplete_intervals
+            and not bar_builder.late_trade_rejections
         ):
             result = "PASS"
         elif (
@@ -238,6 +262,9 @@ async def _run(
             and observations
             and capacity.dropped_messages == 0
             and bar_builder.bars
+            and unresolved_eligibility == 0
+            and not bar_builder.incomplete_intervals
+            and not bar_builder.late_trade_rejections
         ):
             result = "PASS"
         elif status.authenticated and status.subscribed:

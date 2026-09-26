@@ -54,7 +54,9 @@ from .massive_stream import (
 )
 from .live_bars import (
     THIRTY_SECOND_BAR_CLOSED,
+    IncompleteBarInterval,
     LateTradeRejection,
+    TradeEligibilityExclusion,
     ThirtySecondBarBuilder,
     completed_bar_signal_price,
     future_buy_execution_reference,
@@ -99,6 +101,7 @@ __all__ = [
     "DEFAULT_MASSIVE_WS_URL",
     "HistoricalBar",
     "HistoricalBarReplayAdapter",
+    "IncompleteBarInterval",
     "InsufficientHistoryError",
     "InvalidMarketHistoryError",
     "LIVE_QUOTE_RECEIVED",
@@ -147,6 +150,7 @@ __all__ = [
     "THIRTY_SECOND_BAR_CLOSED",
     "ThirtySecondBar",
     "ThirtySecondBarBuilder",
+    "TradeEligibilityExclusion",
     "TimezoneValidationSample",
     "VolumeSemantics",
     "calculate_macd",

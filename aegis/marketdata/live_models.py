@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from math import isfinite
 
 from aegis.clock.utc import ensure_utc
@@ -74,6 +75,38 @@ class LiveTrade(DomainObject):
         if self.trade_id is not None:
             object.__setattr__(self, "trade_id", str(self.trade_id))
         object.__setattr__(self, "conditions", tuple(str(item) for item in self.conditions))
+        exact_size = self.exact_size
+        if not exact_size.is_finite() or exact_size <= 0:
+            raise ValueError("exact trade size must be positive and finite")
+
+    @property
+    def exact_size(self) -> Decimal:
+        """Return exact quantity provenance while retaining the public float size."""
+
+        value = self.metadata.get("effective_quantity_decimal", str(self.size))
+        if isinstance(value, bool):
+            raise ValueError("exact trade size must be decimal-compatible")
+        try:
+            return value if isinstance(value, Decimal) else Decimal(str(value))
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise ValueError("exact trade size must be decimal-compatible") from exc
+
+    @property
+    def updates_high_low(self) -> bool:
+        return self.metadata.get("updates_high_low", True) is True
+
+    @property
+    def updates_open_close(self) -> bool:
+        return self.metadata.get("updates_open_close", True) is True
+
+    @property
+    def updates_volume(self) -> bool:
+        return self.metadata.get("updates_volume", True) is True
+
+    @property
+    def unresolved_conditions(self) -> tuple[str, ...]:
+        value = self.metadata.get("unresolved_conditions", ())
+        return tuple(str(item) for item in value)
 
 
 @dataclass(frozen=True, kw_only=True)

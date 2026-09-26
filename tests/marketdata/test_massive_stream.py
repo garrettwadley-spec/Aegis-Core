@@ -52,7 +52,7 @@ def trade_message(**overrides: object) -> dict[str, object]:
         "s": 100,
         "x": 4,
         "i": "M1",
-        "c": [12, 37],
+        "c": [],
         "t": milliseconds(SOURCE_TIME),
         "pt": milliseconds(SOURCE_TIME) - 1,
         "q": 7001,
@@ -167,7 +167,10 @@ class TestMassiveNormalization(MassiveTestCase):
         self.assertEqual(trade.source_timestamp, SOURCE_TIME)  # type: ignore[union-attr]
 
     def test_provider_sequence_and_trade_provenance_are_immutable(self):
-        trade = normalize_massive_message(trade_message(), received_at=SOURCE_TIME)
+        trade = normalize_massive_message(
+            trade_message(c=[12, 37]),
+            received_at=SOURCE_TIME,
+        )
         self.assertEqual(trade.metadata["provider_sequence"], 7001)  # type: ignore[union-attr]
         self.assertEqual(trade.metadata["participant_timestamp"], milliseconds(SOURCE_TIME) - 1)  # type: ignore[union-attr]
         self.assertEqual(trade.metadata["tape"], 3)  # type: ignore[union-attr]
@@ -376,7 +379,7 @@ class TestMassiveMessageDiagnostics(MassiveTestCase):
 
         diagnostics = adapter.message_diagnostics
         expected = {
-            MassiveMessageClassification.ACCEPTED_TRADE: 1,
+            MassiveMessageClassification.ACCEPTED_TRADE: 2,
             MassiveMessageClassification.ACCEPTED_QUOTE: 1,
             MassiveMessageClassification.RECOGNIZED_CONTROL: 1,
             MassiveMessageClassification.INTENTIONALLY_IGNORED_DOCUMENTED: 1,
@@ -385,7 +388,7 @@ class TestMassiveMessageDiagnostics(MassiveTestCase):
             MassiveMessageClassification.MISSING_OR_INVALID_SYMBOL: 1,
             MassiveMessageClassification.MISSING_OR_INVALID_TIMESTAMP: 1,
             MassiveMessageClassification.MISSING_OR_INVALID_PRICE: 1,
-            MassiveMessageClassification.MISSING_OR_INVALID_SIZE: 1,
+            MassiveMessageClassification.MISSING_OR_INVALID_SIZE: 0,
             MassiveMessageClassification.OTHER_DOMAIN_VALIDATION_FAILURE: 1,
         }
         for classification, count in expected.items():
@@ -394,14 +397,14 @@ class TestMassiveMessageDiagnostics(MassiveTestCase):
         self.assertEqual(diagnostics.messages_received, 12)
         self.assertEqual(diagnostics.total_classified, 12)
         self.assertTrue(diagnostics.counts_reconcile)
-        self.assertEqual(adapter.status.malformed_messages, 8)
-        self.assertEqual(diagnostics.malformed_classified, 8)
+        self.assertEqual(adapter.status.malformed_messages, 7)
+        self.assertEqual(diagnostics.malformed_classified, 7)
         self.assertTrue(diagnostics.malformed_counts_reconcile)
 
     def test_samples_are_bounded_sanitized_and_written_to_ignored_area(self):
         adapter = self.adapter()
         for index in range(7):
-            message = trade_message(s=0, ds="0.5", i=f"F{index}")
+            message = trade_message(s=100, ds="invalid", i=f"F{index}")
             message["api_key"] = "SECRET_SHOULD_NOT_APPEAR"
             message["headers"] = {"authorization": "SECRET_SHOULD_NOT_APPEAR"}
             adapter.handle_message(message)
@@ -412,12 +415,12 @@ class TestMassiveMessageDiagnostics(MassiveTestCase):
             )
             report = json.loads(target.read_text(encoding="utf-8"))
 
-        samples = report["samples_by_reason"]["size_invalid"]
+        samples = report["samples_by_reason"]["decimal_size_invalid"]
         self.assertEqual(len(samples), 5)
         self.assertEqual(samples[0]["event_type"], "T")
-        self.assertEqual(samples[0]["offending_field"], "s")
-        self.assertEqual(samples[0]["offending_value"], 0)
-        self.assertEqual(samples[0]["safe_market_data_fields"]["ds"], "0.5")
+        self.assertEqual(samples[0]["offending_field"], "ds")
+        self.assertEqual(samples[0]["offending_value"], "invalid")
+        self.assertEqual(samples[0]["safe_market_data_fields"]["s"], 100)
         self.assertEqual(samples[0]["bar_ohlc_impact"], "POSSIBLE")
         self.assertEqual(samples[0]["bar_volume_impact"], "POSSIBLE")
         self.assertNotIn("SECRET_SHOULD_NOT_APPEAR", json.dumps(report))
